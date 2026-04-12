@@ -39,7 +39,7 @@
 ## 核心功能
 
 - 训练模块 (`train.py`): 支持本地 JSONL 和 Hugging Face 数据集多源融合
-- 推理模块 (`infer.py`): 提供 CLI 命令行和 HTTP API 两种推理方式
+- 推理模块 (`infer.py` / `infer_onnx.py`): 本地可用 PyTorch，部署默认 ONNX 加速
 - 模型架构 (`model.py`): 轻量级 Transformer + 多任务头设计
 - 工具集 (`dataset.py`): 数据处理和字符级 Tokenizer
 - 阈值搜索 (`threshold_search.py`): 生产环境阈值优化工具
@@ -67,11 +67,11 @@ pip install -r requirements-gpu.txt
 
 ```bash
 # CUDA 12.1
-pip install -r requirements-common.txt
+pip install datasets>=2.14.0 wandb>=0.17.0 numpy>=1.24.0
 pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu121
 
 # CUDA 12.4
-pip install -r requirements-common.txt
+pip install datasets>=2.14.0 wandb>=0.17.0 numpy>=1.24.0
 pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu124
 ```
 
@@ -147,6 +147,10 @@ python infer.py \
 
 ## 快速开始 (部署)
 
+部署与训练分离策略：
+- 本地训练：使用 PyTorch（`train.py` + `.pt`）
+- 发布部署：使用 ONNX 推理（`model.onnx`），不在部署包中包含训练脚本
+
 当前采用 deploy 目录驱动的自动发布流程：
 - 本地维护 `deploy/` 下的部署压缩包（ZIP 与 TAR.GZ）
 - 推送到仓库后由 GitHub Actions 自动重命名并发布到 GitHub Releases
@@ -156,15 +160,26 @@ python infer.py \
 部署时请从 Releases 下载部署包并解压，然后在解压目录中执行：
 
 ```bash
-pip install -r requirements-cpu.txt
-bash run_api.sh --port 8000
+# CPU ONNX 推理
+pip install onnxruntime fastapi uvicorn pydantic numpy
+bash run_api.sh --port 8000 --backend onnx
 ```
 
 GPU 主机可改为：
 
 ```bash
-pip install -r requirements-gpu.txt
-bash run_api.sh --port 8000
+pip install onnxruntime-gpu fastapi uvicorn pydantic numpy
+bash run_api.sh --port 8000 --backend onnx --onnx_gpu
+```
+
+若要从本地 PyTorch 检查点导出 ONNX：
+
+```bash
+python export_onnx.py \
+  --checkpoint ./checkpoints_final_9to1/best.pt \
+  --vocab ./checkpoints_final_9to1/vocab.json \
+  --output ./checkpoints_final_9to1/model.onnx \
+  --max_length 256
 ```
 
 ## 主要功能与特性

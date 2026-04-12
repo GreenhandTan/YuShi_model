@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 启动内容审核推理，并优先使用虚拟环境中的 Python。
-# 用法：bash run_infer.sh "待审核文本" [--threshold 0.52] [--max_length 256] [--batch_size 4] [--device auto]
+# 用法：bash run_infer.sh "待审核文本" [--threshold 0.52] [--max_length 256] [--batch_size 4] [--onnx_gpu]
 
 set -euo pipefail
 
@@ -36,12 +36,12 @@ TEXT="${1:-}"
 THRESHOLD="0.52"
 MAX_LENGTH="256"
 BATCH_SIZE="4"
-DEVICE="auto"
+ONNX_GPU="0"
 OUTPUT=""
 
 if [[ -z "${TEXT}" ]]; then
   echo "错误: 必须提供待审核文本"
-  echo "用法: bash run_infer.sh \"text\" [--threshold 0.52] [--max_length 256] [--batch_size 4] [--device auto]"
+  echo "用法: bash run_infer.sh \"text\" [--threshold 0.52] [--max_length 256] [--batch_size 4] [--onnx_gpu]"
   exit 1
 fi
 
@@ -61,9 +61,9 @@ while [[ $# -gt 0 ]]; do
       BATCH_SIZE="$2"
       shift 2
       ;;
-    --device)
-      DEVICE="$2"
-      shift 2
+    --onnx_gpu)
+      ONNX_GPU="1"
+      shift 1
       ;;
     --output)
       OUTPUT="$2"
@@ -79,15 +79,18 @@ done
 cd "${SCRIPT_DIR}"
 
 CMD=(
-  "${PYTHON_BIN}" infer.py
-  --checkpoint ./checkpoints_final_9to1/best.pt
-  --vocab ./checkpoints_final_9to1/vocab.json
+  "${PYTHON_BIN}" infer_onnx.py
+  --model ./checkpoints/model.onnx
+  --vocab ./checkpoints/vocab.json
   --prompt "${TEXT}"
-  --device "${DEVICE}"
   --max_length "${MAX_LENGTH}"
   --batch_size "${BATCH_SIZE}"
   --violation_conf_threshold "${THRESHOLD}"
 )
+
+if [[ "${ONNX_GPU}" == "1" ]]; then
+  CMD+=(--use_gpu)
+fi
 
 if [[ -n "${OUTPUT}" ]]; then
   CMD+=(--output "${OUTPUT}")
