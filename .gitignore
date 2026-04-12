@@ -34,6 +34,4 @@ __pycache__/
 .cache/
 hf_cache/
 
-# 本地手动发布产物（不入库）
-deploy/*.zip
-deploy/*.tar.gz
+# 部署包允许入库（用于触发发布工作流）

@@ -1,0 +1,75 @@
+name: Release Deploy Packages
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'deploy/*.zip'
+      - 'deploy/*.tar.gz'
+      - '.github/workflows/release_deploy_packages.yml'
+
+jobs:
+  package-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare release metadata
+        run: |
+          echo "RELEASE_DATE=$(date +'%Y%m%d')" >> "$GITHUB_ENV"
+          echo "TAG_NAME=deploy-${GITHUB_RUN_NUMBER}-$(date +'%Y%m%d')" >> "$GITHUB_ENV"
+
+      - name: Rename assets with release date
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release_assets
+          shopt -s nullglob
+
+          for f in deploy/*.zip; do
+            base="$(basename "$f" .zip)"
+            cp "$f" "release_assets/${base}_${RELEASE_DATE}.zip"
+          done
+
+          for f in deploy/*.tar.gz; do
+            base="$(basename "$f" .tar.gz)"
+            cp "$f" "release_assets/${base}_${RELEASE_DATE}.tar.gz"
+          done
+
+          ls -lh release_assets
+
+      - name: Generate checksums
+        run: |
+          sha256sum release_assets/* > release_assets/checksums.txt
+          cat release_assets/checksums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Deploy Package ${{ env.RELEASE_DATE }}
+          draft: false
+          prerelease: false
+          body: |
+            ## 部署包发布
+
+            本次发布由 deploy 目录中的压缩包自动生成。
+
+            - 资产文件已自动附加发布日期后缀
+            - 同时包含 ZIP 与 TAR.GZ 两种格式
+            - 附带 checksums.txt 用于完整性校验
+
+            下载后建议先校验：
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+          files: |
+            release_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
