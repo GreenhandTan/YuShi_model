@@ -196,8 +196,22 @@ python threshold_search.py \
 
 通常不包含在发布中的内容：
 - 数据集文件夹 (基于大小和许可证原因)
-- 模型权重和检查点 (通过 Git LFS 管理)
+- 训练检查点目录 (如 `checkpoints_final_9to1/`)
 - 本地输出日志和缓存
+
+部署包发布方式：
+- 不再使用 GitHub Actions 自动打包发布
+- 采用本地手动打包 `deploy_min/`，再手动上传到 GitHub Releases
+
+推荐发布命令：
+
+```bash
+# 在项目根目录执行
+tar -czf deploy_min_$(date +%Y%m%d_%H%M%S).tar.gz deploy_min
+zip -r deploy_min_$(date +%Y%m%d_%H%M%S).zip deploy_min -x "*.pyc" "*/__pycache__/*"
+```
+
+然后在 GitHub 的 Releases 页面手动上传这两个压缩包。
 
 发布前请确认：
 - 无私有数据在追踪文件中

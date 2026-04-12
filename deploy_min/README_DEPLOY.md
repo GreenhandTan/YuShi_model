@@ -38,6 +38,23 @@
 - `checkpoints/best.pt` —— 模型权重
 - `checkpoints/vocab.json` —— 字符词表
 
+## 发布与分发（手动）
+
+本项目采用本地手动打包发布，不使用 GitHub Actions 自动发布。
+
+在项目根目录执行：
+
+```bash
+tar -czf deploy_min_$(date +%Y%m%d_%H%M%S).tar.gz deploy_min
+zip -r deploy_min_$(date +%Y%m%d_%H%M%S).zip deploy_min -x "*.pyc" "*/__pycache__/*"
+```
+
+然后将生成的压缩包手动上传到 GitHub Releases。
+
+注意：
+- 不要使用仓库源码 ZIP 直接部署（可能拿到 Git LFS 指针文件）
+- 优先使用你手动上传到 Releases 的部署压缩包
+
 ## 快速开始 (Linux / macOS)
 
 ### 1) 安装依赖
