@@ -249,6 +249,29 @@ git push origin main
 
 推送后工作流会自动创建新 Release 并上传处理后的压缩包。
 
+Release 页面部署步骤（ONNX 推理）与此一致：
+
+```bash
+# 1) 下载并解压 deploy_min_*.zip 或 deploy_min_*.tar.gz
+# 2) 进入解压目录
+
+# CPU
+pip install -r requirements-cpu.txt
+bash run_api.sh --port 8000 --backend onnx
+
+# GPU
+pip install -r requirements-gpu.txt
+bash run_api.sh --port 8000 --backend onnx --onnx_gpu
+
+# 健康检查
+curl http://127.0.0.1:8000/health
+
+# 单条审核测试
+curl -X POST http://127.0.0.1:8000/audit \
+  -H "Content-Type: application/json" \
+  -d '{"text":"代发兼职日结，私聊我"}'
+```
+
 发布前请确认：
 - 无私有数据在追踪文件中
 - 所有外部数据集的许可证兼容性

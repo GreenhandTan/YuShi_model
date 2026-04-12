@@ -65,6 +65,36 @@ jobs:
             - 同时包含 ZIP 与 TAR.GZ 两种格式
             - 附带 checksums.txt 用于完整性校验
 
+            ## 部署步骤（ONNX 推理）
+
+            1. 下载并解压 `deploy_min_*.zip` 或 `deploy_min_*.tar.gz`
+            2. 进入解压目录（目录内应包含 `api_server.py`、`infer_onnx.py`、`checkpoints/model.onnx`）
+            3. 安装依赖并启动服务
+
+            CPU:
+            ```bash
+            pip install -r requirements-cpu.txt
+            bash run_api.sh --port 8000 --backend onnx
+            ```
+
+            GPU:
+            ```bash
+            pip install -r requirements-gpu.txt
+            bash run_api.sh --port 8000 --backend onnx --onnx_gpu
+            ```
+
+            4. 健康检查
+            ```bash
+            curl http://127.0.0.1:8000/health
+            ```
+
+            5. 单条审核测试
+            ```bash
+            curl -X POST http://127.0.0.1:8000/audit \
+              -H "Content-Type: application/json" \
+              -d '{"text":"代发兼职日结，私聊我"}'
+            ```
+
             下载后建议先校验：
             ```bash
             sha256sum -c checksums.txt
