@@ -152,8 +152,8 @@ python infer.py \
 - 发布部署：使用 ONNX 推理（`model.onnx`），不在部署包中包含训练脚本
 
 当前采用 deploy 目录驱动的自动发布流程：
-- 本地维护 `deploy/` 下的部署压缩包（ZIP 与 TAR.GZ）
-- 推送到仓库后由 GitHub Actions 自动重命名并发布到 GitHub Releases
+- 本地维护 `deploy/deploy_min/` 下的部署原始文件
+- 当 `deploy/` 内容变更并推送后，GitHub Actions 会自动打包 ZIP/TAR.GZ 并发布到 GitHub Releases
 
 本地部署后的测试网页服务文件夹为 `web_test/`，用于快速验证模型在本地 WSL 服务上的审核效果。
 
@@ -225,29 +225,22 @@ python threshold_search.py \
 - 本地输出日志和缓存
 
 部署包发布方式：
-- 采用 `deploy/` 目录压缩包触发发布
-- 当 `deploy/*.zip` 或 `deploy/*.tar.gz` 发生变更时，GitHub Actions 自动执行发布
-- 发布时会自动为压缩包文件名追加当天日期后缀，并上传到 GitHub Releases
+- 采用 `deploy/` 目录原始文件触发发布
+- 当 `deploy/**` 发生变更时，GitHub Actions 自动执行打包与发布
+- 发布时会自动生成 ZIP 与 TAR.GZ，并为压缩包文件名追加当天日期后缀
 - 同时生成并上传 `checksums.txt` 用于校验完整性
 
-推荐本地打包命令（示例）：
+推荐本地发布更新流程（示例）：
 
 ```bash
-# 在项目根目录执行（示例）
-mkdir -p deploy
-tar -czf deploy/deploy_min_$(date +%Y%m%d_%H%M%S).tar.gz deploy_min
-zip -r deploy/deploy_min_$(date +%Y%m%d_%H%M%S).zip deploy_min -x "*.pyc" "*/__pycache__/*"
-```
-
-然后提交并推送：
-
-```bash
-git add deploy/*.zip deploy/*.tar.gz
-git commit -m "chore: 更新 deploy 发布包"
+# 1) 更新 deploy/deploy_min 下需要发布的原始文件
+# 2) 提交并推送
+git add deploy/
+git commit -m "chore: update deploy source files"
 git push origin main
 ```
 
-推送后工作流会自动创建新 Release 并上传处理后的压缩包。
+推送后工作流会自动创建新 Release，并上传自动生成的压缩包。
 
 Release 页面部署步骤（ONNX 推理）与此一致：
 

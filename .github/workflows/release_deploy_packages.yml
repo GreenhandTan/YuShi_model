@@ -6,8 +6,7 @@ on:
       - main
       - master
     paths:
-      - 'deploy/*.zip'
-      - 'deploy/*.tar.gz'
+      - 'deploy/**'
       - '.github/workflows/release_deploy_packages.yml'
 
 jobs:
@@ -25,22 +24,21 @@ jobs:
           echo "RELEASE_DATE=$(date +'%Y%m%d')" >> "$GITHUB_ENV"
           echo "TAG_NAME=deploy-${GITHUB_RUN_NUMBER}-$(date +'%Y%m%d')" >> "$GITHUB_ENV"
 
-      - name: Rename assets with release date
+      - name: Build release archives from deploy directory
         shell: bash
         run: |
           set -euo pipefail
+
+          if [[ ! -d deploy/deploy_min ]]; then
+            echo "deploy/deploy_min not found. Please commit deploy source files first."
+            exit 1
+          fi
+
           mkdir -p release_assets
-          shopt -s nullglob
 
-          for f in deploy/*.zip; do
-            base="$(basename "$f" .zip)"
-            cp "$f" "release_assets/${base}_${RELEASE_DATE}.zip"
-          done
-
-          for f in deploy/*.tar.gz; do
-            base="$(basename "$f" .tar.gz)"
-            cp "$f" "release_assets/${base}_${RELEASE_DATE}.tar.gz"
-          done
+          zip -r "release_assets/deploy_min_${RELEASE_DATE}.zip" deploy/deploy_min \
+            -x "*/__pycache__/*" "*.pyc"
+          tar -czf "release_assets/deploy_min_${RELEASE_DATE}.tar.gz" -C deploy deploy_min
 
           ls -lh release_assets
 
@@ -59,9 +57,9 @@ jobs:
           body: |
             ## 部署包发布
 
-            本次发布由 deploy 目录中的压缩包自动生成。
+            本次发布由 `deploy/deploy_min/` 目录自动打包生成。
 
-            - 资产文件已自动附加发布日期后缀
+            - 资产文件由工作流自动打包并附加发布日期后缀
             - 同时包含 ZIP 与 TAR.GZ 两种格式
             - 附带 checksums.txt 用于完整性校验
 

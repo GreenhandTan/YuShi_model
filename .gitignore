@@ -31,6 +31,9 @@ __pycache__/
 *.onnx
 *.log
 
+# deploy 源文件入库（由工作流自动打包发布）
+!deploy/**/*.onnx
+
 .cache/
 hf_cache/
 
