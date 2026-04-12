@@ -2,6 +2,28 @@
 
 此目录包含内容审核模型推理所需的最小文件集。支持 Linux、Docker 等多种环境。
 
+## 环境选择指南
+
+### 我应该选择 CPU 还是 GPU？
+
+**选择 CPU：**
+- 云服务器无 GPU (阿里云普通实例、腾讯云标准型等)
+- 本地开发机无显卡
+- 吞吐量需求不高（< 100 条/秒）
+- 想快速测试部署
+
+优点：安装快、依赖少、无需驱动
+缺点：推理速度慢 (100-200ms 单条)
+
+**选择 GPU：**
+- 本地有 NVIDIA 显卡
+- 云服务器配置了 GPU (阿里云 GPU 实例、Lambda Labs 等)
+- 吞吐量需求高 (> 100 条/秒)
+- 对延迟敏感的在线服务
+
+优点：推理快 (50-100ms 单条)
+缺点：需要 CUDA、cudnn，环境配置复杂
+
 ## 文件清单
 
 - `infer.py` —— 推理核心脚本
@@ -20,9 +42,35 @@
 
 ### 1) 安装依赖
 
+根据你的部署环境选择合适的依赖版本：
+
+**仅 CPU 推理（推荐云服务器无 GPU）：**
+
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-cpu.txt
 ```
+
+**GPU 推理（本地 GPU 或 GPU 云主机，CUDA 11.8）：**
+
+```bash
+pip install -r requirements-gpu.txt
+```
+
+**其他 CUDA 版本（GPU）：**
+
+- CUDA 12.1：
+```bash
+pip install torch>=2.1.0 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements-common.txt
+```
+
+- CUDA 12.4：
+```bash
+pip install torch>=2.1.0 --index-url https://download.pytorch.org/whl/cu124
+pip install -r requirements-common.txt
+```
+
+更多 CUDA 版本详见 [PyTorch 官方安装指南](https://pytorch.org/)
 
 ### 2) CLI 推理
 
@@ -83,16 +131,36 @@ print(result)
 
 ## Docker 部署
 
-### 构建镜像
+### 构建镜像（CPU 版）
 
 ```bash
 docker build -t content-audit:latest .
 ```
 
-### 运行容器
+### 构建镜像（GPU 版，CUDA 11.8）
+
+编辑 Dockerfile 内容，修改 torch 安装：
+
+```bash
+pip install torch>=2.1.0 --index-url https://download.pytorch.org/whl/cu118
+```
+
+或在构建时指定：
+
+```bash
+docker build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu118 -t content-audit:gpu .
+```
+
+### 运行容器（CPU）
 
 ```bash
 docker run -d -p 8000:8000 --name audit-api content-audit:latest
+```
+
+### 运行容器（GPU）
+
+```bash
+docker run -d -p 8000:8000 --gpus all --name audit-api content-audit:gpu
 ```
 
 ### 测试服务

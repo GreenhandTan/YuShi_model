@@ -51,9 +51,31 @@
 
 安装依赖：
 
+**仅 CPU 推理和训练：**
+
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-cpu.txt
 ```
+
+**GPU 训练和推理（CUDA 11.8）：**
+
+```bash
+pip install -r requirements-gpu.txt
+```
+
+**其他 CUDA 版本（GPU）：**
+
+```bash
+# CUDA 12.1
+pip install -r requirements-common.txt
+pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu121
+
+# CUDA 12.4
+pip install -r requirements-common.txt
+pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu124
+```
+
+详见 [PyTorch 官方安装指南](https://pytorch.org/)
 
 ## 数据格式
 
