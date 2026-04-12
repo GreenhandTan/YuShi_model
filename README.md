@@ -151,6 +151,8 @@ python infer.py \
 - 本地维护 `deploy/` 下的部署压缩包（ZIP 与 TAR.GZ）
 - 推送到仓库后由 GitHub Actions 自动重命名并发布到 GitHub Releases
 
+本地部署后的测试网页服务文件夹为 `web_test/`，用于快速验证模型在本地 WSL 服务上的审核效果。
+
 部署时请从 Releases 下载部署包并解压，然后在解压目录中执行：
 
 ```bash
