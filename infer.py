@@ -44,6 +44,10 @@ class AuditInferencer:
         vocab_path: str,
         device: str = "auto",
         use_bf16: bool = False,
+        max_length: int = 256,
+        batch_size: int = 4,
+        enforce_safe_consistency: bool = True,
+        violation_conf_threshold: float = 0.0,
     ):
         """
         Args:
@@ -54,6 +58,10 @@ class AuditInferencer:
         """
         self.device = self._resolve_device(device)
         self.use_bf16 = use_bf16 and (self.device.type == "cuda")
+        self.max_length = max_length
+        self.batch_size = batch_size
+        self.enforce_safe_consistency = enforce_safe_consistency
+        self.violation_conf_threshold = max(0.0, min(1.0, violation_conf_threshold))
 
         # 加载 tokenizer
         print(f"加载词汇表: {vocab_path}")
@@ -94,6 +102,28 @@ class AuditInferencer:
             return torch.device("cuda" if torch.cuda.is_available() else "cpu")
         return torch.device(device)
 
+    def _postprocess_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """对推理结果做阈值与一致性后处理。"""
+        out = dict(result)
+
+        conf = float(out.get("confidence", 0.0))
+        pred_violation = bool(out.get("is_violation", False))
+
+        # 当预测为违规但置信度低于阈值时，回退为合规
+        if pred_violation and conf < self.violation_conf_threshold:
+            out["is_violation"] = False
+            out["reason"] = (
+                f"原始违规置信度 {conf:.1%} 低于阈值 {self.violation_conf_threshold:.1%}，"
+                "按阈值策略回退为合规。"
+            )
+
+        # 一致性规则: 合规时强制 risk/type 为 safe
+        if self.enforce_safe_consistency and not bool(out.get("is_violation", False)):
+            out["risk_level"] = "safe"
+            out["violation_type"] = "safe"
+
+        return out
+
     # ---- 单条审核 ----
 
     @torch.inference_mode()
@@ -110,8 +140,12 @@ class AuditInferencer:
                 "reason": str,
             }
         """
-        result = self.model.audit(text, tokenizer=self.tokenizer)
-        return result
+        result = self.model.audit(
+            text,
+            tokenizer=self.tokenizer,
+            max_length=self.max_length,
+        )
+        return self._postprocess_result(result)
 
     def audit_json(self, text: str) -> str:
         """审核单条文本，返回 JSON 字符串"""
@@ -137,7 +171,13 @@ class AuditInferencer:
             }
         """
         start = time.time()
-        results = self.model.audit_batch(texts, tokenizer=self.tokenizer)
+        results = self.model.audit_batch(
+            texts,
+            tokenizer=self.tokenizer,
+            max_length=self.max_length,
+            batch_size=self.batch_size,
+        )
+        results = [self._postprocess_result(r) for r in results]
         elapsed = time.time() - start
 
         violation_count = sum(1 for r in results if r["is_violation"])
@@ -293,6 +333,13 @@ def parse_args():
     p.add_argument("--device", type=str, default="auto",
                    help="设备 (auto/cpu/cuda/cuda:0)")
     p.add_argument("--bf16", action="store_true", help="使用 BF16 推理")
+    p.add_argument("--max_length", type=int, default=256, help="推理最大文本长度")
+    p.add_argument("--batch_size", type=int, default=4, help="批量推理 batch 大小")
+    p.add_argument("--num_threads", type=int, default=2, help="CPU 推理线程数")
+    p.add_argument("--violation_conf_threshold", type=float, default=0.0,
+                   help="违规判定最小置信度阈值 (0~1)。低于阈值的违规将回退为合规")
+    p.add_argument("--disable_safe_consistency", action="store_true",
+                   help="关闭一致性后处理（默认开启：合规时强制 risk/type=safe）")
 
     return p.parse_args()
 
@@ -300,12 +347,20 @@ def parse_args():
 def main():
     args = parse_args()
 
+    if args.num_threads > 0:
+        torch.set_num_threads(args.num_threads)
+        torch.set_num_interop_threads(max(1, min(args.num_threads, 2)))
+
     # 初始化推理器
     engine = AuditInferencer(
         checkpoint_path=args.checkpoint,
         vocab_path=args.vocab,
         device=args.device,
         use_bf16=args.bf16,
+        max_length=args.max_length,
+        batch_size=args.batch_size,
+        enforce_safe_consistency=not args.disable_safe_consistency,
+        violation_conf_threshold=args.violation_conf_threshold,
     )
 
     # ---- 分发到各模式 ----

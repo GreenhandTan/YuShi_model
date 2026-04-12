@@ -1,0 +1,109 @@
+name: Release Deploy Package
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'deploy_min/**'
+      - '.github/workflows/release_deploy_min.yml'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up environment
+        run: |
+          echo "DEPLOY_VERSION=$(date +'%Y%m%d_%H%M%S')" >> $GITHUB_ENV
+          echo "TAG_NAME=deploy-$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_ENV
+      
+      - name: Package as ZIP
+        run: |
+          cd deploy_min
+          zip -r ../deploy_min_${{ env.DEPLOY_VERSION }}.zip . -x "*.pyc" "__pycache__/*"
+          cd ..
+          ls -lh deploy_min_*.zip
+      
+      - name: Package as TAR.GZ
+        run: |
+          tar --exclude='__pycache__' --exclude='*.pyc' -czf deploy_min_${{ env.DEPLOY_VERSION }}.tar.gz deploy_min/
+          ls -lh deploy_min_*.tar.gz
+      
+      - name: Get file hashes
+        run: |
+          sha256sum deploy_min_*.zip deploy_min_*.tar.gz > checksums.txt
+          cat checksums.txt
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: Deploy Package - ${{ env.DEPLOY_VERSION }}
+          draft: false
+          prerelease: false
+          body: |
+            ## 部署包发布
+            
+            此版本包含完整的部署包，可直接用于生产环境部署。
+            
+            ### 文件清单
+            
+            - deploy_min_${{ env.DEPLOY_VERSION }}.zip - ZIP 格式压缩包（跨平台，Windows/Linux/macOS）
+            - deploy_min_${{ env.DEPLOY_VERSION }}.tar.gz - TAR.GZ 格式压缩包（推荐用于 Linux/Docker）
+            - checksums.txt - SHA256 校验和
+            
+            ### 快速开始
+            
+            **Linux/macOS:**
+            ```bash
+            tar -xzf deploy_min_${{ env.DEPLOY_VERSION }}.tar.gz
+            cd deploy_min
+            pip install -r requirements.txt
+            ./run_api.sh --port 8000
+            ```
+            
+            **Windows (需要 WSL 或 Git Bash):**
+            ```bash
+            unzip deploy_min_${{ env.DEPLOY_VERSION }}.zip
+            cd deploy_min
+            pip install -r requirements.txt
+            bash run_api.sh --port 8000
+            ```
+            
+            **Docker:**
+            ```bash
+            tar -xzf deploy_min_${{ env.DEPLOY_VERSION }}.tar.gz
+            cd deploy_min
+            docker build -t content-audit:latest .
+            docker run -d -p 8000:8000 content-audit:latest
+            ```
+            
+            ### 文件验证
+            
+            验证下载的文件完整性：
+            ```bash
+            sha256sum -c checksums.txt
+            ```
+            
+            ### 内容说明
+            
+            此部署包包含：
+            - 内容审核推理脚本 (infer.py)
+            - FastAPI HTTP 服务入口 (api_server.py)
+            - 预训练模型权重 (best.pt, 105 MB)
+            - 字符词表 (vocab.json)
+            - 启动脚本 (run_infer.sh, run_api.sh)
+            - Docker 配置 (Dockerfile, docker-compose.yml)
+            
+            更多信息请查看项目 [README.md](https://github.com/${{ github.repository }}/blob/main/README.md)
+          files: |
+            deploy_min_${{ env.DEPLOY_VERSION }}.zip
+            deploy_min_${{ env.DEPLOY_VERSION }}.tar.gz
+            checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
