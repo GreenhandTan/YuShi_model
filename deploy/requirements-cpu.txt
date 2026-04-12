@@ -1,5 +1,6 @@
-# CPU 训练和推理（不需要 CUDA）
-torch>=2.1.0
-datasets>=2.14.0
-wandb>=0.17.0
+# CPU ONNX 推理依赖（不需要 CUDA）
+onnxruntime>=1.18.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+pydantic>=2.7.0
 numpy>=1.24.0

@@ -1,5 +1,6 @@
-# GPU 训练和推理（CUDA 11.8）
-torch>=2.1.0 --index-url https://download.pytorch.org/whl/cu118
-datasets>=2.14.0
-wandb>=0.17.0
+# GPU ONNX 推理依赖（CUDA）
+onnxruntime-gpu>=1.18.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+pydantic>=2.7.0
 numpy>=1.24.0
