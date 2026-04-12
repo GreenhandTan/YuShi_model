@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 启动内容审核 API，并在启动前自动清理端口占用。
-# 用法：bash run_api.sh [--host 0.0.0.0] [--port 8000] [--workers 2]
+# 用法：bash run_api.sh [--host 0.0.0.0] [--port 8000] [--workers 2] [--onnx_gpu]
 
 set -euo pipefail
 
@@ -9,7 +9,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST="0.0.0.0"
 PORT="8000"
 WORKERS="2"
-BACKEND="onnx"
 ONNX_USE_GPU="0"
 PYTHON_BIN=""
 
@@ -51,17 +50,13 @@ while [[ $# -gt 0 ]]; do
       WORKERS="$2"
       shift 2
       ;;
-    --backend)
-      BACKEND="$2"
-      shift 2
-      ;;
     --onnx_gpu)
       ONNX_USE_GPU="1"
       shift 1
       ;;
     *)
       echo "未知参数: $1"
-      echo "用法: bash run_api.sh [--host 0.0.0.0] [--port 8000] [--workers 2] [--backend onnx|pytorch] [--onnx_gpu]"
+      echo "用法: bash run_api.sh [--host 0.0.0.0] [--port 8000] [--workers 2] [--onnx_gpu]"
       exit 1
       ;;
   esac
@@ -93,10 +88,9 @@ fi
 
 echo "[run_api] 启动服务: http://${HOST}:${PORT}"
 echo "[run_api] 使用 Python: ${PYTHON_BIN}"
-echo "[run_api] 后端: ${BACKEND}"
 echo "[run_api] ONNX GPU: ${ONNX_USE_GPU}"
 
 # 需要在当前目录存在 api_server.py
 cd "${SCRIPT_DIR}"
-INFER_BACKEND="${BACKEND}" ONNX_USE_GPU="${ONNX_USE_GPU}" \
+ONNX_USE_GPU="${ONNX_USE_GPU}" \
 "${PYTHON_BIN}" -m uvicorn api_server:app --host "${HOST}" --port "${PORT}" --workers "${WORKERS}"

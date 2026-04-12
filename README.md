@@ -162,14 +162,14 @@ python infer.py \
 ```bash
 # CPU ONNX 推理
 pip install onnxruntime fastapi uvicorn pydantic numpy
-bash run_api.sh --port 8000 --backend onnx
+bash run_api.sh --port 8000
 ```
 
 GPU 主机可改为：
 
 ```bash
 pip install onnxruntime-gpu fastapi uvicorn pydantic numpy
-bash run_api.sh --port 8000 --backend onnx --onnx_gpu
+bash run_api.sh --port 8000 --onnx_gpu
 ```
 
 若要从本地 PyTorch 检查点导出 ONNX：
@@ -257,11 +257,11 @@ Release 页面部署步骤（ONNX 推理）与此一致：
 
 # CPU
 pip install -r requirements-cpu.txt
-bash run_api.sh --port 8000 --backend onnx
+bash run_api.sh --port 8000
 
 # GPU
 pip install -r requirements-gpu.txt
-bash run_api.sh --port 8000 --backend onnx --onnx_gpu
+bash run_api.sh --port 8000 --onnx_gpu
 
 # 健康检查
 curl http://127.0.0.1:8000/health

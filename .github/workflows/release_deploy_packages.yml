@@ -74,13 +74,13 @@ jobs:
             CPU:
             ```bash
             pip install -r requirements-cpu.txt
-            bash run_api.sh --port 8000 --backend onnx
+            bash run_api.sh --port 8000
             ```
 
             GPU:
             ```bash
             pip install -r requirements-gpu.txt
-            bash run_api.sh --port 8000 --backend onnx --onnx_gpu
+            bash run_api.sh --port 8000 --onnx_gpu
             ```
 
             4. 健康检查
