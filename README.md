@@ -147,10 +147,9 @@ python infer.py \
 
 ## 快速开始 (部署)
 
-当前采用手动发布流程：
-- 本地打包完整部署目录为压缩包
-- 将压缩包放到 `deploy/` 目录
-- 手动上传到 GitHub Releases
+当前采用 deploy 目录驱动的自动发布流程：
+- 本地维护 `deploy/` 下的部署压缩包（ZIP 与 TAR.GZ）
+- 推送到仓库后由 GitHub Actions 自动重命名并发布到 GitHub Releases
 
 部署时请从 Releases 下载部署包并解压，然后在解压目录中执行：
 
@@ -209,11 +208,12 @@ python threshold_search.py \
 - 本地输出日志和缓存
 
 部署包发布方式：
-- 不再使用 GitHub Actions 自动打包发布
-- 采用本地手动打包部署目录，压缩包统一放在 `deploy/`
-- 手动上传 `deploy/` 下的压缩包到 GitHub Releases
+- 采用 `deploy/` 目录压缩包触发发布
+- 当 `deploy/*.zip` 或 `deploy/*.tar.gz` 发生变更时，GitHub Actions 自动执行发布
+- 发布时会自动为压缩包文件名追加当天日期后缀，并上传到 GitHub Releases
+- 同时生成并上传 `checksums.txt` 用于校验完整性
 
-推荐发布命令：
+推荐本地打包命令（示例）：
 
 ```bash
 # 在项目根目录执行（示例）
@@ -222,7 +222,15 @@ tar -czf deploy/deploy_min_$(date +%Y%m%d_%H%M%S).tar.gz deploy_min
 zip -r deploy/deploy_min_$(date +%Y%m%d_%H%M%S).zip deploy_min -x "*.pyc" "*/__pycache__/*"
 ```
 
-然后在 GitHub 的 Releases 页面手动上传 `deploy/` 下的压缩包。
+然后提交并推送：
+
+```bash
+git add deploy/*.zip deploy/*.tar.gz
+git commit -m "chore: 更新 deploy 发布包"
+git push origin main
+```
+
+推送后工作流会自动创建新 Release 并上传处理后的压缩包。
 
 发布前请确认：
 - 无私有数据在追踪文件中
