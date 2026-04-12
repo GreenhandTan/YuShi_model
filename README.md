@@ -152,7 +152,7 @@ python infer.py \
 - 发布部署：使用 ONNX 推理（`model.onnx`），不在部署包中包含训练脚本
 
 当前采用 deploy 目录驱动的自动发布流程：
-- 本地维护 `deploy/deploy_min/` 下的部署原始文件
+- 本地维护 `deploy/` 下的部署原始文件
 - 当 `deploy/` 内容变更并推送后，GitHub Actions 会自动打包 ZIP/TAR.GZ 并发布到 GitHub Releases
 
 本地部署后的测试网页服务文件夹为 `web_test/`，用于快速验证模型在本地 WSL 服务上的审核效果。
@@ -233,7 +233,7 @@ python threshold_search.py \
 推荐本地发布更新流程（示例）：
 
 ```bash
-# 1) 更新 deploy/deploy_min 下需要发布的原始文件
+# 1) 更新 deploy 下需要发布的原始文件
 # 2) 提交并推送
 git add deploy/
 git commit -m "chore: update deploy source files"
@@ -245,7 +245,7 @@ git push origin main
 Release 页面部署步骤（ONNX 推理）与此一致：
 
 ```bash
-# 1) 下载并解压 deploy_min_*.zip 或 deploy_min_*.tar.gz
+# 1) 下载并解压 deploy_*.zip 或 deploy_*.tar.gz
 # 2) 进入解压目录
 
 # CPU

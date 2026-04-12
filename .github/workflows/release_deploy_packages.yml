@@ -29,16 +29,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! -d deploy/deploy_min ]]; then
-            echo "deploy/deploy_min not found. Please commit deploy source files first."
+          if [[ ! -f deploy/api_server.py ]]; then
+            echo "deploy source files not found. Please commit deploy directory first."
             exit 1
           fi
 
           mkdir -p release_assets
 
-          zip -r "release_assets/deploy_min_${RELEASE_DATE}.zip" deploy/deploy_min \
+          zip -r "release_assets/deploy_${RELEASE_DATE}.zip" deploy \
             -x "*/__pycache__/*" "*.pyc"
-          tar -czf "release_assets/deploy_min_${RELEASE_DATE}.tar.gz" -C deploy deploy_min
+          tar -czf "release_assets/deploy_${RELEASE_DATE}.tar.gz" deploy
 
           ls -lh release_assets
 
@@ -57,7 +57,7 @@ jobs:
           body: |
             ## 部署包发布
 
-            本次发布由 `deploy/deploy_min/` 目录自动打包生成。
+            本次发布由 `deploy/` 目录自动打包生成。
 
             - 资产文件由工作流自动打包并附加发布日期后缀
             - 同时包含 ZIP 与 TAR.GZ 两种格式
@@ -65,7 +65,7 @@ jobs:
 
             ## 部署步骤（ONNX 推理）
 
-            1. 下载并解压 `deploy_min_*.zip` 或 `deploy_min_*.tar.gz`
+            1. 下载并解压 `deploy_*.zip` 或 `deploy_*.tar.gz`
             2. 进入解压目录（目录内应包含 `api_server.py`、`infer_onnx.py`、`checkpoints/model.onnx`）
             3. 安装依赖并启动服务
 
