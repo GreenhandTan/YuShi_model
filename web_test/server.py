@@ -1,13 +1,76 @@
 #!/usr/bin/env python3
 import json
+import os
+import shutil
+import signal
+import subprocess
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-HOST = "127.0.0.1"
+HOST = "0.0.0.0"
 PORT = 8090
 AUDIT_API = "http://127.0.0.1:8000/audit"
+
+
+class ReusableHTTPServer(HTTPServer):
+    allow_reuse_address = True
+
+
+def _run_command(command: list[str]) -> str:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        return completed.stdout.strip()
+    except FileNotFoundError:
+        return ""
+
+
+def _kill_pids(pids: list[int]) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            continue
+
+    time.sleep(0.5)
+
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            continue
+
+
+def cleanup_port(port: int) -> None:
+    lsof = shutil.which("lsof")
+    if lsof:
+        output = _run_command([lsof, "-t", f"-iTCP:{port}", "-sTCP:LISTEN"])
+        if output:
+            pids = [int(item) for item in output.splitlines() if item.strip().isdigit()]
+            if pids:
+                print(f"[web_test] 释放端口 {port}: {pids}")
+                _kill_pids(pids)
+        return
+
+    fuser = shutil.which("fuser")
+    if fuser:
+        print(f"[web_test] 使用 fuser 释放端口 {port}")
+        subprocess.run([fuser, "-k", f"{port}/tcp"], check=False)
+        return
+
+    print(f"[web_test] 未找到 lsof/fuser，跳过端口清理: {port}")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -83,9 +146,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    cleanup_port(PORT)
     print(f"[web_test] open: http://{HOST}:{PORT}")
     print(f"[web_test] proxy to: {AUDIT_API}")
-    HTTPServer((HOST, PORT), Handler).serve_forever()
+    ReusableHTTPServer((HOST, PORT), Handler).serve_forever()
 
 
 if __name__ == "__main__":
