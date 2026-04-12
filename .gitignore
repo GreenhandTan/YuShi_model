@@ -34,7 +34,6 @@ __pycache__/
 .cache/
 hf_cache/
 
-# 例外：部署包中的模型文件需要提交到 GitHub
-!deploy_min/checkpoints/
-!deploy_min/checkpoints/*.pt
-!deploy_min/checkpoints/*.json
+# 本地手动发布产物（不入库）
+deploy/*.zip
+deploy/*.tar.gz

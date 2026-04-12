@@ -1,3 +1,0 @@
-# 仅 CPU 推理依赖
--r requirements-common.txt
-torch>=2.1.0  # CPU 版本，pip 默认安装 CPU

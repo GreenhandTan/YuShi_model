@@ -1,3 +1,0 @@
-# GPU 推理依赖（CUDA 11.8）
--r requirements-common.txt
-torch>=2.1.0 --index-url https://download.pytorch.org/whl/cu118

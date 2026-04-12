@@ -147,15 +147,24 @@ python infer.py \
 
 ## 快速开始 (部署)
 
-对于快速部署（无需训练），可使用 `deploy_min` 文件夹中的部署包：
+当前采用手动发布流程：
+- 本地打包完整部署目录为压缩包
+- 将压缩包放到 `deploy/` 目录
+- 手动上传到 GitHub Releases
+
+部署时请从 Releases 下载部署包并解压，然后在解压目录中执行：
 
 ```bash
-cd deploy_min
-pip install -r requirements.txt
-./run_api.sh --port 8000
+pip install -r requirements-cpu.txt
+bash run_api.sh --port 8000
 ```
 
-详见 [deploy_min/README_DEPLOY.md](deploy_min/README_DEPLOY.md)
+GPU 主机可改为：
+
+```bash
+pip install -r requirements-gpu.txt
+bash run_api.sh --port 8000
+```
 
 ## 主要功能与特性
 
@@ -201,17 +210,19 @@ python threshold_search.py \
 
 部署包发布方式：
 - 不再使用 GitHub Actions 自动打包发布
-- 采用本地手动打包 `deploy_min/`，再手动上传到 GitHub Releases
+- 采用本地手动打包部署目录，压缩包统一放在 `deploy/`
+- 手动上传 `deploy/` 下的压缩包到 GitHub Releases
 
 推荐发布命令：
 
 ```bash
-# 在项目根目录执行
-tar -czf deploy_min_$(date +%Y%m%d_%H%M%S).tar.gz deploy_min
-zip -r deploy_min_$(date +%Y%m%d_%H%M%S).zip deploy_min -x "*.pyc" "*/__pycache__/*"
+# 在项目根目录执行（示例）
+mkdir -p deploy
+tar -czf deploy/deploy_min_$(date +%Y%m%d_%H%M%S).tar.gz deploy_min
+zip -r deploy/deploy_min_$(date +%Y%m%d_%H%M%S).zip deploy_min -x "*.pyc" "*/__pycache__/*"
 ```
 
-然后在 GitHub 的 Releases 页面手动上传这两个压缩包。
+然后在 GitHub 的 Releases 页面手动上传 `deploy/` 下的压缩包。
 
 发布前请确认：
 - 无私有数据在追踪文件中
