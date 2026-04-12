@@ -188,6 +188,62 @@ def _write_jsonl(path: Path, rows: List[Dict]):
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _load_jsonl_rows(path: str) -> List[Dict]:
+    rows: List[Dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            rows.append(json.loads(line))
+    return rows
+
+
+def _augment_rows_with_sensitive_lexicon(rows: List[Dict], args: argparse.Namespace, seed: int, log_prefix: str) -> List[Dict]:
+    if not args.add_sensitive_lexicon:
+        return rows
+
+    base_rows_count = len(rows)
+    lexicon_rows = _load_sensitive_lexicon_rows(args)
+    if not lexicon_rows:
+        logger.warning(f"[{log_prefix}] 未合并任何词库样本")
+        return rows
+
+    ratio = min(max(args.lexicon_max_ratio, 0.0), 0.95)
+    # 约束: lexicon / (base + lexicon) <= ratio
+    # 推导: lexicon <= ratio/(1-ratio) * base
+    allowed_lexicon = int(base_rows_count * ratio / max(1e-8, 1.0 - ratio))
+
+    if allowed_lexicon <= 0:
+        logger.info(f"[{log_prefix}] 词库比例上限过低，已跳过词库样本")
+        return rows
+
+    if len(lexicon_rows) > allowed_lexicon:
+        rng_local = random.Random(seed + 7)
+        rng_local.shuffle(lexicon_rows)
+        lexicon_rows = lexicon_rows[:allowed_lexicon]
+        logger.info(
+            f"[{log_prefix}] 按比例上限截断词库样本: {allowed_lexicon} 条 "
+            f"(max_ratio={ratio:.2f})"
+        )
+
+    rows = list(rows)
+    rows.extend(lexicon_rows)
+    logger.info(f"[{log_prefix}] 已合并词库样本: {len(lexicon_rows)} 条")
+    return rows
+
+
+def _compute_violation_class_weights(dataset: AuditDataset) -> torch.Tensor:
+    """根据训练集分布计算违规二分类权重。"""
+    total = len(dataset)
+    violation_count = sum(int(sample["is_violation"]) for sample in dataset.samples)
+    safe_count = total - violation_count
+
+    safe_weight = total / (2.0 * max(safe_count, 1))
+    violation_weight = total / (2.0 * max(violation_count, 1))
+    return torch.tensor([safe_weight, violation_weight], dtype=torch.float32)
+
+
 def _parse_dataset_specs(dataset_specs: str) -> List[Dict[str, str]]:
     """
     解析多数据集配置字符串。
@@ -402,31 +458,7 @@ def build_jsonl_from_hf(args: argparse.Namespace):
     if not rows:
         raise RuntimeError("从 Hugging Face 数据集中未解析到有效样本")
 
-    if args.add_sensitive_lexicon:
-        base_rows_count = len(rows)
-        lexicon_rows = _load_sensitive_lexicon_rows(args)
-        if lexicon_rows:
-            ratio = min(max(args.lexicon_max_ratio, 0.0), 0.95)
-            # 约束: lexicon / (base + lexicon) <= ratio
-            # 推导: lexicon <= ratio/(1-ratio) * base
-            allowed_lexicon = int(base_rows_count * ratio / max(1e-8, 1.0 - ratio))
-
-            if allowed_lexicon <= 0:
-                lexicon_rows = []
-                logger.info("[LEXICON] 词库比例上限过低，已跳过词库样本")
-            elif len(lexicon_rows) > allowed_lexicon:
-                rng_local = random.Random(args.hf_seed + 7)
-                rng_local.shuffle(lexicon_rows)
-                lexicon_rows = lexicon_rows[:allowed_lexicon]
-                logger.info(
-                    f"[LEXICON] 按比例上限截断词库样本: {allowed_lexicon} 条 "
-                    f"(max_ratio={ratio:.2f})"
-                )
-
-            rows.extend(lexicon_rows)
-            logger.info(f"[LEXICON] 已合并词库样本: {len(lexicon_rows)} 条")
-        else:
-            logger.warning("[LEXICON] 未合并任何词库样本")
+    rows = _augment_rows_with_sensitive_lexicon(rows, args, seed=args.hf_seed, log_prefix="HF")
 
     rng = random.Random(args.hf_seed)
     rng.shuffle(rows)
@@ -493,6 +525,7 @@ class AuditLoss(nn.Module):
         violation_weight: float = 2.0,
         risk_weight: float = 1.0,
         type_weight: float = 1.5,
+        violation_class_weights: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         self.w_violation = violation_weight
@@ -500,6 +533,7 @@ class AuditLoss(nn.Module):
         self.w_type = type_weight
         
         self.ce = nn.CrossEntropyLoss()
+        self.violation_ce = nn.CrossEntropyLoss(weight=violation_class_weights)
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(
@@ -517,7 +551,7 @@ class AuditLoss(nn.Module):
         """
         # 违规二分类 loss
         # violation_logits 形状 (B, 2)，labels["violation"] 形状 (B,)
-        violation_loss = self.ce(outputs["violation_logits"], labels["violation"])
+        violation_loss = self.violation_ce(outputs["violation_logits"], labels["violation"])
 
         # 风险等级多分类 loss
         risk_loss = self.ce(outputs["risk_logits"], labels["risk_level"])
@@ -554,11 +588,13 @@ def evaluate(
     model.eval()
     
     total_violation_correct = 0
+    violation_tp = 0
+    violation_fp = 0
+    violation_tn = 0
+    violation_fn = 0
     total_risk_correct = 0
     total_type_correct = 0
     total_samples = 0
-    
-    all_losses = []
 
     for batch in dataloader:
         input_ids = batch["input_ids"].to(device)
@@ -570,6 +606,10 @@ def evaluate(
         pred_violation = outputs["violation_logits"].argmax(dim=-1).cpu()
         true_violation = batch["labels"]["violation"]
         total_violation_correct += (pred_violation == true_violation).sum().item()
+        violation_tp += ((pred_violation == 1) & (true_violation == 1)).sum().item()
+        violation_fp += ((pred_violation == 1) & (true_violation == 0)).sum().item()
+        violation_tn += ((pred_violation == 0) & (true_violation == 0)).sum().item()
+        violation_fn += ((pred_violation == 0) & (true_violation == 1)).sum().item()
 
         pred_risk = outputs["risk_logits"].argmax(dim=-1).cpu()
         true_risk = batch["labels"]["risk_level"]
@@ -582,8 +622,18 @@ def evaluate(
         total_samples += input_ids.size(0)
 
     n = max(total_samples, 1)
+    violation_precision = violation_tp / (violation_tp + violation_fp) if (violation_tp + violation_fp) else 0.0
+    violation_recall = violation_tp / (violation_tp + violation_fn) if (violation_tp + violation_fn) else 0.0
+    violation_f1 = (
+        2 * violation_precision * violation_recall / (violation_precision + violation_recall)
+        if (violation_precision + violation_recall)
+        else 0.0
+    )
     metrics = {
         "val_acc_violation": round(total_violation_correct / n, 4),
+        "val_violation_precision": round(violation_precision, 4),
+        "val_violation_recall": round(violation_recall, 4),
+        "val_violation_f1": round(violation_f1, 4),
         "val_acc_risk": round(total_risk_correct / n, 4),
         "val_acc_type": round(total_type_correct / n, 4),
     }
@@ -628,12 +678,26 @@ class Trainer:
         self.use_bf16 = args.use_bf16
         self.scaler = GradScaler(enabled=self.use_amp)
 
+        violation_class_weights = None
+        if hasattr(train_loader.dataset, "samples"):
+            violation_class_weights = _compute_violation_class_weights(train_loader.dataset)
+            safe_count = len(train_loader.dataset) - sum(int(sample["is_violation"]) for sample in train_loader.dataset.samples)
+            violation_count = sum(int(sample["is_violation"]) for sample in train_loader.dataset.samples)
+            self._log(
+                "  违规样本分布: safe={safe} | violation={violation} | class_weights={weights}".format(
+                    safe=safe_count,
+                    violation=violation_count,
+                    weights=[round(float(v), 4) for v in violation_class_weights.tolist()],
+                )
+            )
+
         # 损失函数
         self.criterion = AuditLoss(
             violation_weight=2.0,
             risk_weight=1.0,
             type_weight=1.5,
-        )
+            violation_class_weights=violation_class_weights,
+        ).to(self.device)
 
         # 优化器 & 调度器
         no_decay = ["bias", "LayerNorm.weight"]
@@ -774,12 +838,16 @@ class Trainer:
                     if self.val_loader and self.eval_every > 0 and self.global_step % self.eval_every == 0:
                         metrics = evaluate(self.model, self.val_loader, self.device)
                         combined_score = (
-                            metrics["val_acc_violation"] * 3 +
+                            metrics["val_violation_recall"] * 2 +
+                            metrics["val_violation_f1"] * 2 +
                             metrics["val_acc_risk"] +
                             metrics["val_acc_type"]
                         )
                         self._log(
                             f"  Val -> ViolAcc:{metrics['val_acc_violation']:.4f} "
+                            f"ViolP:{metrics['val_violation_precision']:.4f} "
+                            f"ViolR:{metrics['val_violation_recall']:.4f} "
+                            f"ViolF1:{metrics['val_violation_f1']:.4f} "
                             f"RiskAcc:{metrics['val_acc_risk']:.4f} "
                             f"TypeAcc:{metrics['val_acc_type']:.4f}"
                         )
@@ -846,14 +914,20 @@ def parse_args():
                    help="Sensitive-lexicon 本地目录；不存在时自动 clone")
     p.add_argument("--lexicon_max_samples", type=int, default=20000,
                    help="词库样本上限，0 表示不限制")
-    p.add_argument("--lexicon_max_ratio", type=float, default=0.2,
-                   help="词库样本占总样本比例上限 (默认0.2)")
+    p.add_argument("--lexicon_max_ratio", type=float, default=0.95,
+                   help="词库样本占总样本比例上限 (默认0.95，几乎等同全量引入)")
 
     # 模型
     p.add_argument("--dim", type=int, default=256, help="隐藏维度 (默认256，轻量)")
     p.add_argument("--n_layers", type=int, default=6, help="Transformer 层数")
     p.add_argument("--n_heads", type=int, default=4, help="注意力头数")
     p.add_argument("--ffn_multiplier", type=int, default=4, help="FFN 倍数")
+    p.add_argument(
+        "--pool_last_weight",
+        type=float,
+        default=0.6,
+        help="融合池化中 last-token 权重，范围[0,1]；其余权重自动分配给 mean-pooling",
+    )
 
     # 训练超参
     p.add_argument("--epochs", type=int, default=10)
@@ -891,6 +965,19 @@ def main():
             args.val_data = val_path
     elif not args.train_data:
         raise ValueError("请提供 --train_data，或提供 --hf_dataset_name 使用 Hugging Face 数据集")
+    else:
+        if args.add_sensitive_lexicon:
+            local_rows = _load_jsonl_rows(args.train_data)
+            local_rows = _augment_rows_with_sensitive_lexicon(
+                local_rows,
+                args,
+                seed=args.hf_seed,
+                log_prefix="LOCAL",
+            )
+            augmented_train_path = Path(args.output_dir) / "local_train_augmented.jsonl"
+            _write_jsonl(augmented_train_path, local_rows)
+            args.train_data = str(augmented_train_path)
+            logger.info(f"[LOCAL] 训练集已写入增强版本: {augmented_train_path} ({len(local_rows)} 条)")
 
     # 构建 tokenizer
     if args.vocab_file and Path(args.vocab_file).exists():
@@ -929,6 +1016,7 @@ def main():
         n_heads=args.n_heads,
         ffn_multiplier=args.ffn_multiplier,
         max_seq_len=args.max_seq_len,
+        pool_last_weight=args.pool_last_weight,
     )
     print(f"参数量: {model.count_parameters()['total']:,}")
 

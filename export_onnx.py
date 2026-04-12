@@ -63,6 +63,7 @@ def main() -> None:
         (dummy_input_ids, dummy_attention_mask),
         str(output_path),
         opset_version=args.opset,
+        dynamo=False,
         input_names=["input_ids", "attention_mask"],
         output_names=["violation_logits", "risk_logits", "type_logits", "confidence"],
         dynamic_axes={

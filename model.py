@@ -199,6 +199,7 @@ class ContentAuditExpert(nn.Module):
         norm_eps: float = 1e-6,
         dropout: float = 0.0,
         pad_token_id: int = 0,
+        pool_last_weight: float = 0.6,
     ):
         super().__init__()
 
@@ -207,6 +208,8 @@ class ContentAuditExpert(nn.Module):
         self.n_layers = n_layers
         self.max_seq_len = max_seq_len
         self.pad_token_id = pad_token_id
+        # 融合池化权重：保留长文本末尾语义，同时引入全局均值增强短文本稳定性
+        self.pool_last_weight = float(max(0.0, min(1.0, pool_last_weight)))
         ffn_dim = dim * ffn_multiplier
 
         # ---- 主干网络 ----
@@ -218,7 +221,7 @@ class ContentAuditExpert(nn.Module):
         self.norm = RMSNorm(dim, norm_eps)
 
         # ---- 多任务分类头 ----
-        # 使用 [CLS] 风格的池化：取最后一个有效 token 的隐状态做分类
+        # 使用融合池化：last-token 与 mean-pooling 融合表示
         hidden_size = dim
 
         # 二分类：是否违规
@@ -281,16 +284,25 @@ class ContentAuditExpert(nn.Module):
     def _pool(self, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         池化：获取用于分类的句子级表示
-        
-        策略: 取最后一个非 padding token 的隐状态
+
+        策略: 融合 last-token 和 mean-pooling
+        - last-token: 对长文本更敏感，保留尾部判别信号
+        - mean-pooling: 对短文本更稳定，降低单 token 波动
         """
         if attention_mask is not None:
             # 找每个样本最后一个有效位置
-            seq_lengths = attention_mask.sum(dim=1) - 1  # (B,)
+            lengths = attention_mask.sum(dim=1).clamp(min=1)  # (B,)
+            seq_lengths = lengths - 1
             batch_idx = torch.arange(hidden_states.size(0), device=hidden_states.device)
-            pooled = hidden_states[batch_idx, seq_lengths]  # (B, D)
+            last_pooled = hidden_states[batch_idx, seq_lengths]  # (B, D)
+
+            valid_mask = attention_mask.unsqueeze(-1).to(hidden_states.dtype)  # (B, T, 1)
+            mean_pooled = (hidden_states * valid_mask).sum(dim=1) / lengths.unsqueeze(-1).to(hidden_states.dtype)
         else:
-            pooled = hidden_states[:, -1, :]  # 取最后一个位置
+            last_pooled = hidden_states[:, -1, :]
+            mean_pooled = hidden_states.mean(dim=1)
+
+        pooled = self.pool_last_weight * last_pooled + (1.0 - self.pool_last_weight) * mean_pooled
         return pooled
 
     def forward(

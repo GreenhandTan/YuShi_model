@@ -10,6 +10,7 @@ HOST="0.0.0.0"
 PORT="8000"
 WORKERS="2"
 ONNX_USE_GPU="0"
+VIOLATION_CONF_THRESHOLD="${VIOLATION_CONF_THRESHOLD:-0.30}"
 PYTHON_BIN=""
 
 for candidate in \
@@ -89,8 +90,10 @@ fi
 echo "[run_api] 启动服务: http://${HOST}:${PORT}"
 echo "[run_api] 使用 Python: ${PYTHON_BIN}"
 echo "[run_api] ONNX GPU: ${ONNX_USE_GPU}"
+echo "[run_api] 违规阈值: ${VIOLATION_CONF_THRESHOLD}"
 
 # 需要在当前目录存在 api_server.py
 cd "${SCRIPT_DIR}"
 ONNX_USE_GPU="${ONNX_USE_GPU}" \
+VIOLATION_CONF_THRESHOLD="${VIOLATION_CONF_THRESHOLD}" \
 "${PYTHON_BIN}" -m uvicorn api_server:app --host "${HOST}" --port "${PORT}" --workers "${WORKERS}"

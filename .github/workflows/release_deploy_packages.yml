@@ -53,7 +53,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG_NAME }}
-          name: Deploy Package ${{ env.RELEASE_DATE }}
+          name: YuShi_model ${{ env.RELEASE_DATE }}
           draft: false
           prerelease: false
           body: |

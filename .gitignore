@@ -3,6 +3,7 @@ outputs/
 wandb/
 DataSet/
 external/
+reports/
 checkpoints_*/
 audit_results.json
 best_threshold.json

@@ -8,20 +8,18 @@ from pydantic import BaseModel, Field
 from infer_onnx import AuditONNXInferencer
 
 BASE_DIR = Path(__file__).resolve().parent
-_LOCAL_CKPT = BASE_DIR / "checkpoints_final_9to1" / "best.pt"
-_LOCAL_VOCAB = BASE_DIR / "checkpoints_final_9to1" / "vocab.json"
 _DEPLOY_ONNX = BASE_DIR / "checkpoints" / "model.onnx"
 _DEPLOY_VOCAB = BASE_DIR / "checkpoints" / "vocab.json"
 
 DEFAULT_ONNX_MODEL = os.getenv(
     "ONNX_MODEL_PATH",
-    str(_DEPLOY_ONNX if _DEPLOY_ONNX.exists() else BASE_DIR / "checkpoints_final_9to1" / "model.onnx"),
+    str(_DEPLOY_ONNX),
 )
 DEFAULT_VOCAB = os.getenv(
     "VOCAB_PATH",
-    str(_DEPLOY_VOCAB if _DEPLOY_VOCAB.exists() else _LOCAL_VOCAB),
+    str(_DEPLOY_VOCAB),
 )
-DEFAULT_THRESHOLD = float(os.getenv("VIOLATION_CONF_THRESHOLD", "0.52"))
+DEFAULT_THRESHOLD = float(os.getenv("VIOLATION_CONF_THRESHOLD", "0.30"))
 DEFAULT_ONNX_USE_GPU = os.getenv("ONNX_USE_GPU", "0") == "1"
 DEFAULT_MAX_LENGTH = int(os.getenv("INFER_MAX_LENGTH", "256"))
 DEFAULT_BATCH_SIZE = int(os.getenv("INFER_BATCH_SIZE", "16"))

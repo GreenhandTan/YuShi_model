@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 启动内容审核推理，并优先使用虚拟环境中的 Python。
-# 用法：bash run_infer.sh "待审核文本" [--threshold 0.52] [--max_length 256] [--batch_size 4] [--onnx_gpu]
+# 用法：bash run_infer.sh "待审核文本" [--threshold 0.30] [--max_length 256] [--batch_size 4] [--onnx_gpu]
 
 set -euo pipefail
 
@@ -33,7 +33,7 @@ if [[ -z "${PYTHON_BIN}" ]]; then
 fi
 
 TEXT="${1:-}"
-THRESHOLD="0.52"
+THRESHOLD="0.30"
 MAX_LENGTH="256"
 BATCH_SIZE="4"
 ONNX_GPU="0"
@@ -41,7 +41,7 @@ OUTPUT=""
 
 if [[ -z "${TEXT}" ]]; then
   echo "错误: 必须提供待审核文本"
-  echo "用法: bash run_infer.sh \"text\" [--threshold 0.52] [--max_length 256] [--batch_size 4] [--onnx_gpu]"
+  echo "用法: bash run_infer.sh \"text\" [--threshold 0.30] [--max_length 256] [--batch_size 4] [--onnx_gpu]"
   exit 1
 fi
 

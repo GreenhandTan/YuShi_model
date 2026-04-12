@@ -38,8 +38,7 @@
 
 ## 核心功能
 
-- 训练模块 (`train.py`): 支持本地 JSONL 和 Hugging Face 数据集多源融合
-- 推理模块 (`infer.py` / `infer_onnx.py`): 本地可用 PyTorch，部署默认 ONNX 加速
+- 部署推理模块 (`infer_onnx.py` / `api_server.py`): ONNX Runtime 高性能推理
 - 模型架构 (`model.py`): 轻量级 Transformer + 多任务头设计
 - 工具集 (`dataset.py`): 数据处理和字符级 Tokenizer
 - 阈值搜索 (`threshold_search.py`): 生产环境阈值优化工具
@@ -51,13 +50,13 @@
 
 安装依赖：
 
-**仅 CPU 推理和训练：**
+**仅 CPU 推理：**
 
 ```bash
 pip install -r requirements-cpu.txt
 ```
 
-**GPU 训练和推理（CUDA 11.8）：**
+**GPU 推理（CUDA 11.8）：**
 
 ```bash
 pip install -r requirements-gpu.txt
@@ -77,58 +76,23 @@ pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu124
 
 详见 [PyTorch 官方安装指南](https://pytorch.org/)
 
-## 数据格式
+## 部署说明
 
-训练数据使用 JSONL 格式（每行一个 JSON 对象）：
+deploy 目录只用于推理部署，不包含训练流程。
 
-```json
-{"text": "...", "is_violation": 0, "violation_type": "safe", "risk_level": "safe"}
-```
-
-标签定义：
-
-- 违规类型: `safe|politics|pornography|violence|abuse|spam|fraud|other`
-- 风险等级: `safe|low|medium|high|critical`
-
-## 训练
-
-### 1) 从 Hugging Face 数据集训练
-
-```bash
-python train.py \
-  --hf_datasets "SUSTech/ChineseSafe|test|text|label|subject,zjunlp/ChineseHarm-bench|train|文本|标签|标签" \
-  --hf_val_ratio 0.1 \
-  --epochs 5 \
-  --batch_size 16 \
-  --val_batch_size 32 \
-  --max_seq_len 256 \
-  --use_cuda \
-  --output_dir ./checkpoints_final_9to1
-```
-
-### 2) 从本地 JSONL 文件训练
-
-```bash
-python train.py \
-  --train_data ./path/to/train.jsonl \
-  --val_data ./path/to/val.jsonl \
-  --epochs 5 \
-  --batch_size 16 \
-  --val_batch_size 32 \
-  --max_seq_len 256 \
-  --use_cuda \
-  --output_dir ./checkpoints_local
-```
+- 线上部署仅使用 ONNX 文件：`./checkpoints/model.onnx` + `./checkpoints/vocab.json`
+- 不需要 `train.py`、`.pt` 检查点或训练数据
+- 当前默认违规阈值为 `0.30`
 
 ## 推理
 
 ### 单条/批量推理
 
 ```bash
-python infer.py \
-  --checkpoint ./checkpoints_final_9to1/best.pt \
-  --vocab ./checkpoints_final_9to1/vocab.json \
-  --device cuda \
+python infer_onnx.py \
+  --model ./checkpoints/model.onnx \
+  --vocab ./checkpoints/vocab.json \
+  --use_gpu \
   --violation_conf_threshold 0.30 \
   --prompts "今天天气很好，准备去跑步。" "代发视频兼职日结，私聊我。"
 ```
@@ -136,10 +100,10 @@ python infer.py \
 ### 文件批处理
 
 ```bash
-python infer.py \
-  --checkpoint ./checkpoints_final_9to1/best.pt \
-  --vocab ./checkpoints_final_9to1/vocab.json \
-  --device cuda \
+python infer_onnx.py \
+  --model ./checkpoints/model.onnx \
+  --vocab ./checkpoints/vocab.json \
+  --use_gpu \
   --violation_conf_threshold 0.30 \
   --input_file ./input.jsonl \
   --output ./predictions.json
@@ -148,8 +112,8 @@ python infer.py \
 ## 快速开始 (部署)
 
 部署与训练分离策略：
-- 本地训练：使用 PyTorch（`train.py` + `.pt`）
-- 发布部署：使用 ONNX 推理（`model.onnx`），不在部署包中包含训练脚本
+- 本地训练：在仓库根目录完成
+- 发布部署：deploy 包只保留 ONNX 推理所需文件
 
 当前采用 deploy 目录驱动的自动发布流程：
 - 本地维护 `deploy/` 下的部署原始文件
@@ -176,10 +140,12 @@ bash run_api.sh --port 8000 --onnx_gpu
 
 ```bash
 python export_onnx.py \
-  --checkpoint ./checkpoints_final_9to1/best.pt \
-  --vocab ./checkpoints_final_9to1/vocab.json \
-  --output ./checkpoints_final_9to1/model.onnx \
+  --checkpoint ./checkpoints_complete_6sources/best.pt \
+  --vocab ./checkpoints_complete_6sources/vocab.json \
+  --output ./deploy/checkpoints/model.onnx \
   --max_length 256
+
+cp ./checkpoints_complete_6sources/vocab.json ./deploy/checkpoints/vocab.json
 ```
 
 ## 主要功能与特性
@@ -203,16 +169,16 @@ python export_onnx.py \
 
 ```bash
 python threshold_search.py \
-  --checkpoint ./checkpoints_final_9to1/best.pt \
-  --vocab ./checkpoints_final_9to1/vocab.json \
-  --val_jsonl ./DataSet/merged_9to1/train_9to1_val.jsonl \
+  --checkpoint ./checkpoints_funnlp_lexicon/best.pt \
+  --vocab ./checkpoints_funnlp_lexicon/vocab.json \
+  --val_jsonl ./path/to/val.jsonl \
   --device cuda \
   --thr_start 0.30 \
   --thr_end 0.80 \
   --thr_step 0.01 \
   --objective balanced \
-  --out_csv ./checkpoints_final_9to1/threshold_search_results.csv \
-  --out_best ./checkpoints_final_9to1/best_threshold.json
+  --out_csv ./checkpoints_funnlp_lexicon/threshold_search_results.csv \
+  --out_best ./checkpoints_funnlp_lexicon/best_threshold.json
 ```
 
 ## 开源发布说明
@@ -221,7 +187,7 @@ python threshold_search.py \
 
 通常不包含在发布中的内容：
 - 数据集文件夹 (基于大小和许可证原因)
-- 训练检查点目录 (如 `checkpoints_final_9to1/`)
+- 训练检查点目录 (如 `checkpoints_complete_6sources/`)
 - 本地输出日志和缓存
 
 部署包发布方式：

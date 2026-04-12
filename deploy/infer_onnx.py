@@ -33,7 +33,7 @@ class AuditONNXInferencer:
         max_length: int = 256,
         batch_size: int = 16,
         enforce_safe_consistency: bool = True,
-        violation_conf_threshold: float = 0.52,
+        violation_conf_threshold: float = 0.30,
     ):
         self.max_length = max_length
         self.batch_size = batch_size
@@ -174,7 +174,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--use_gpu", action="store_true")
     p.add_argument("--max_length", type=int, default=256)
     p.add_argument("--batch_size", type=int, default=16)
-    p.add_argument("--violation_conf_threshold", type=float, default=0.52)
+    p.add_argument("--violation_conf_threshold", type=float, default=0.30)
     p.add_argument("--disable_safe_consistency", action="store_true")
     return p.parse_args()
 

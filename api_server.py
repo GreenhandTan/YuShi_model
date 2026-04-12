@@ -21,7 +21,7 @@ DEFAULT_VOCAB = os.getenv(
     "VOCAB_PATH",
     str(_DEPLOY_VOCAB if _DEPLOY_VOCAB.exists() else _LOCAL_VOCAB),
 )
-DEFAULT_THRESHOLD = float(os.getenv("VIOLATION_CONF_THRESHOLD", "0.52"))
+DEFAULT_THRESHOLD = float(os.getenv("VIOLATION_CONF_THRESHOLD", "0.30"))
 DEFAULT_ONNX_USE_GPU = os.getenv("ONNX_USE_GPU", "0") == "1"
 DEFAULT_MAX_LENGTH = int(os.getenv("INFER_MAX_LENGTH", "256"))
 DEFAULT_BATCH_SIZE = int(os.getenv("INFER_BATCH_SIZE", "16"))

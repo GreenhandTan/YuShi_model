@@ -47,7 +47,7 @@ class AuditInferencer:
         max_length: int = 256,
         batch_size: int = 4,
         enforce_safe_consistency: bool = True,
-        violation_conf_threshold: float = 0.52,
+        violation_conf_threshold: float = 0.30,
     ):
         """
         Args:
@@ -336,7 +336,7 @@ def parse_args():
     p.add_argument("--max_length", type=int, default=256, help="推理最大文本长度")
     p.add_argument("--batch_size", type=int, default=4, help="批量推理 batch 大小")
     p.add_argument("--num_threads", type=int, default=2, help="CPU 推理线程数")
-    p.add_argument("--violation_conf_threshold", type=float, default=0.52,
+    p.add_argument("--violation_conf_threshold", type=float, default=0.30,
                    help="违规判定最小置信度阈值 (0~1)。低于阈值的违规将回退为合规")
     p.add_argument("--disable_safe_consistency", action="store_true",
                    help="关闭一致性后处理（默认开启：合规时强制 risk/type=safe）")
