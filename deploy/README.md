@@ -140,12 +140,12 @@ bash run_api.sh --port 8000 --onnx_gpu
 
 ```bash
 python export_onnx.py \
-  --checkpoint ./checkpoints_complete_6sources/best.pt \
-  --vocab ./checkpoints_complete_6sources/vocab.json \
+  --checkpoint ./checkpoints_complete_plus_generated_150k/best.pt \
+  --vocab ./checkpoints_complete_plus_generated_150k/vocab.json \
   --output ./deploy/checkpoints/model.onnx \
   --max_length 256
 
-cp ./checkpoints_complete_6sources/vocab.json ./deploy/checkpoints/vocab.json
+cp ./checkpoints_complete_plus_generated_150k/vocab.json ./deploy/checkpoints/vocab.json
 ```
 
 ## 主要功能与特性
@@ -187,7 +187,7 @@ python threshold_search.py \
 
 通常不包含在发布中的内容：
 - 数据集文件夹 (基于大小和许可证原因)
-- 训练检查点目录 (如 `checkpoints_complete_6sources/`)
+- 训练检查点目录 (如 `checkpoints_complete_plus_generated_150k/`)
 - 本地输出日志和缓存
 
 部署包发布方式：
