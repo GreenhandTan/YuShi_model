@@ -18,6 +18,7 @@ import math
 import random
 import re
 import argparse
+import importlib.util
 import logging
 import subprocess
 from pathlib import Path
@@ -29,7 +30,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.cuda.amp import GradScaler, autocast
 
 try:
     import wandb
@@ -108,31 +108,43 @@ SUBJECT_ALIASES = {
     "伦理": "道德伦理",
 }
 
-# 未命中标准类目时的关键词兜底
+# 未命中标准类目时的关键词兜底 (带上下文感知)
 KEYWORD_RULES = [
-    (["色情", "淫秽", "露点", "成人视频"], ("pornography", "high")),
-    (["辱骂", "脏话", "侮辱", "歧视", "仇恨"], ("abuse", "medium")),
-    (["颠覆", "政变", "分裂", "敏感政治", "六四"], ("politics", "high")),
-    (["诈骗", "骗", "隐私", "银行卡", "密码", "钓鱼"], ("fraud", "high")),
-    (["爆炸", "杀", "砍", "伤害", "暴力", "恐怖"], ("violence", "critical")),
-    (["赌博", "毒品", "违禁", "违法", "犯罪"], ("other", "high")),
-    (["伦理", "道德"], ("other", "low")),
-    (["焦虑", "抑郁", "自卑", "心理"], ("other", "medium")),
+    # 色情类 - 严格匹配
+    (["色情", "淫秽", "露点", "成人视频", "AV", "18禁"], ("pornography", "high")),
+
+    # 辱骂类
+    (["辱骂", "脏话", "侮辱", "歧视", "仇恨", "傻逼", "妈的"], ("abuse", "medium")),
+
+    # 政治敏感 (排除学术讨论)
+    (["颠覆", "政变", "分裂", "敏感政治", "六四", "港独", "台独"], ("politics", "high")),
+
+    # 欺诈/诈骗
+    (["诈骗", "骗", "钓鱼", "木马", "银行卡", "密码泄露"], ("fraud", "high")),
+
+    # 暴力/血腥
+    (["爆炸", "杀人", "砍", "伤害", "暴力", "恐怖", "恐怖分子"], ("violence", "critical")),
+
+    # 违法犯罪
+    (["赌博", "毒品", "违禁", "走私", "贩毒"], ("other", "high")),
+
+    # 心理健康相关
+    (["焦虑", "抑郁", "自杀", "自伤", "心理"], ("other", "medium")),
 ]
 
 CHINESE_HARM_LABEL_TO_TARGET = {
     "不违规": (0, "safe", "safe"),
     "低俗色情": (1, "pornography", "high"),
-    "博彩": (1, "fraud", "high"),
+    "博彩": (1, "other", "high"),       # 修复: 博彩应归类为 "other"，非 "fraud"
     "欺诈": (1, "fraud", "high"),
     "谩骂引战": (1, "abuse", "medium"),
     "黑产广告": (1, "spam", "medium"),
 }
 
 LEXICON_FILENAME_RULES = [
-    (["政治", "gfw"], ("politics", "high")),
-    (["色情", "xx", "成人"], ("pornography", "high")),
-    (["博彩", "赌博"], ("fraud", "high")),
+    (["政治", "gfw", "敏感"], ("politics", "high")),
+    (["色情", "xx", "成人", "AV"], ("pornography", "high")),
+    (["博彩", "赌博"], ("other", "high")),  # 修复: 博彩应该是 "other" 而非 "fraud"
     (["诈骗", "欺诈"], ("fraud", "high")),
     (["辱骂", "仇恨", "引战"], ("abuse", "medium")),
     (["非法网址", "网址", "广告"], ("spam", "medium")),
@@ -145,6 +157,46 @@ def _normalize_subject(subject: str) -> str:
     # 清理空白和常见分隔符，提升匹配鲁棒性
     s = re.sub(r"[\s\-_/|]+", "", s)
     return s
+
+
+def _should_filter_keyword_match(text: str, keyword: str) -> bool:
+    """
+    判断关键词匹配是否应该被过滤（即不认为是违规）。
+
+    规则:
+    - 关键词出现在学术/讨论语境中 → 过滤
+    - 关键词被用于否定/警告语境 → 可能过滤
+    - 关键词出现在新闻/新闻标题中 → 过滤
+
+    返回 True 表示应该过滤此匹配。
+    """
+    # 找到关键词在文本中的位置
+    idx = text.find(keyword)
+    if idx == -1:
+        return False
+
+    # 提取前后各50个字符的上下文
+    start = max(0, idx - 50)
+    end = min(len(text), idx + len(keyword) + 50)
+    context = text[start:end]
+
+    # 过滤条件
+    filter_patterns = [
+        # 学术/讨论语境
+        r"讨论|研究|分析|学|科学|理论|观点|看法|意见",
+        # 否定语境
+        r"不支持|反对|谴责|禁止|不允许|非法",
+        # 新闻语境
+        r"报道|新闻|消息|据悉|日前|今日",
+        # 信息性语境
+        r"词典|定义|解释|意思是|指的是",
+    ]
+
+    for pattern in filter_patterns:
+        if re.search(pattern, context):
+            return True
+
+    return False
 
 
 def _parse_violation_label(label_value) -> int:
@@ -209,7 +261,7 @@ def _augment_rows_with_sensitive_lexicon(rows: List[Dict], args: argparse.Namesp
         logger.warning(f"[{log_prefix}] 未合并任何词库样本")
         return rows
 
-    ratio = min(max(args.lexicon_max_ratio, 0.0), 0.95)
+    ratio = min(max(args.lexicon_max_ratio, 0.0), 0.50)
     # 约束: lexicon / (base + lexicon) <= ratio
     # 推导: lexicon <= ratio/(1-ratio) * base
     allowed_lexicon = int(base_rows_count * ratio / max(1e-8, 1.0 - ratio))
@@ -242,6 +294,44 @@ def _compute_violation_class_weights(dataset: AuditDataset) -> torch.Tensor:
     safe_weight = total / (2.0 * max(safe_count, 1))
     violation_weight = total / (2.0 * max(violation_count, 1))
     return torch.tensor([safe_weight, violation_weight], dtype=torch.float32)
+
+
+def _compute_risk_level_class_weights(dataset: AuditDataset) -> torch.Tensor:
+    """根据训练集分布计算风险等级多分类权重 (5 类: safe/low/medium/high/critical)。"""
+    from dataset import RISK_LEVEL_TO_ID, ID_TO_RISK_LEVEL
+
+    total = len(dataset)
+    risk_counts = {i: 0 for i in range(5)}
+
+    for sample in dataset.samples:
+        risk_id = sample["risk_level_id"]
+        risk_counts[risk_id] += 1
+
+    weights = []
+    for i in range(5):
+        count = max(risk_counts[i], 1)
+        weight = total / (5.0 * count)  # 5 = 类别数
+        weights.append(weight)
+
+    return torch.tensor(weights, dtype=torch.float32)
+
+
+def _compute_violation_type_class_weights(dataset: AuditDataset) -> torch.Tensor:
+    """根据训练集分布计算违规类型多分类权重 (8 类: safe/politics/...)。"""
+    total = len(dataset)
+    type_counts = {i: 0 for i in range(8)}
+
+    for sample in dataset.samples:
+        type_id = sample["violation_type_id"]
+        type_counts[type_id] += 1
+
+    weights = []
+    for i in range(8):
+        count = max(type_counts[i], 1)
+        weight = total / (8.0 * count)  # 8 = 类别数
+        weights.append(weight)
+
+    return torch.tensor(weights, dtype=torch.float32)
 
 
 def _parse_dataset_specs(dataset_specs: str) -> List[Dict[str, str]]:
@@ -526,14 +616,18 @@ class AuditLoss(nn.Module):
         risk_weight: float = 1.0,
         type_weight: float = 1.5,
         violation_class_weights: Optional[torch.Tensor] = None,
+        risk_class_weights: Optional[torch.Tensor] = None,
+        type_class_weights: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         self.w_violation = violation_weight
         self.w_risk = risk_weight
         self.w_type = type_weight
-        
+
         self.ce = nn.CrossEntropyLoss()
         self.violation_ce = nn.CrossEntropyLoss(weight=violation_class_weights)
+        self.risk_ce = nn.CrossEntropyLoss(weight=risk_class_weights)
+        self.type_ce = nn.CrossEntropyLoss(weight=type_class_weights)
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(
@@ -553,11 +647,11 @@ class AuditLoss(nn.Module):
         # violation_logits 形状 (B, 2)，labels["violation"] 形状 (B,)
         violation_loss = self.violation_ce(outputs["violation_logits"], labels["violation"])
 
-        # 风险等级多分类 loss
-        risk_loss = self.ce(outputs["risk_logits"], labels["risk_level"])
+        # 风险等级多分类 loss (使用加权版本)
+        risk_loss = self.risk_ce(outputs["risk_logits"], labels["risk_level"])
 
-        # 违规类型多分类 loss
-        type_loss = self.ce(outputs["type_logits"], labels["violation_type"])
+        # 违规类型多分类 loss (使用加权版本)
+        type_loss = self.type_ce(outputs["type_logits"], labels["violation_type"])
 
         # 加权总损失
         total = (
@@ -662,6 +756,7 @@ class Trainer:
 
         self.device = torch.device("cuda" if torch.cuda.is_available() and args.use_cuda else "cpu")
         self.model.to(self.device)
+        self.non_blocking = self.device.type == "cuda"
 
         # 超参数
         self.lr = args.learning_rate
@@ -676,11 +771,19 @@ class Trainer:
 
         self.use_amp = args.use_amp and not args.use_bf16
         self.use_bf16 = args.use_bf16
-        self.scaler = GradScaler(enabled=self.use_amp)
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
+        self._compile_fallback_used = False
+        self._original_model = getattr(model, "_orig_mod", None)
 
         violation_class_weights = None
+        risk_class_weights = None
+        type_class_weights = None
+
         if hasattr(train_loader.dataset, "samples"):
             violation_class_weights = _compute_violation_class_weights(train_loader.dataset)
+            risk_class_weights = _compute_risk_level_class_weights(train_loader.dataset)
+            type_class_weights = _compute_violation_type_class_weights(train_loader.dataset)
+
             safe_count = len(train_loader.dataset) - sum(int(sample["is_violation"]) for sample in train_loader.dataset.samples)
             violation_count = sum(int(sample["is_violation"]) for sample in train_loader.dataset.samples)
             self._log(
@@ -691,12 +794,26 @@ class Trainer:
                 )
             )
 
+            # 日志输出风险等级和违规类型的分布
+            from dataset import ID_TO_RISK_LEVEL, ID_TO_VIOLATION_TYPE
+            risk_dist = {ID_TO_RISK_LEVEL[i]: count for i, count in enumerate(
+                [sum(1 for s in train_loader.dataset.samples if s["risk_level_id"] == i) for i in range(5)]
+            )}
+            self._log(f"  风险等级分布: {risk_dist}")
+
+            type_dist = {ID_TO_VIOLATION_TYPE[i]: count for i, count in enumerate(
+                [sum(1 for s in train_loader.dataset.samples if s["violation_type_id"] == i) for i in range(8)]
+            )}
+            self._log(f"  违规类型分布: {type_dist}")
+
         # 损失函数
         self.criterion = AuditLoss(
             violation_weight=2.0,
             risk_weight=1.0,
             type_weight=1.5,
             violation_class_weights=violation_class_weights,
+            risk_class_weights=risk_class_weights,
+            type_class_weights=type_class_weights,
         ).to(self.device)
 
         # 优化器 & 调度器
@@ -708,6 +825,7 @@ class Trainer:
              "weight_decay": 0.0},
         ]
         self.optimizer = AdamW(param_groups, lr=self.lr, eps=1e-8)
+        self.optimizer.zero_grad(set_to_none=True)
 
         total_steps = len(train_loader) // self.grad_accum_steps * self.epochs
         warmup_steps = int(total_steps * args.warmup_ratio)
@@ -776,21 +894,39 @@ class Trainer:
                 attention_mask = batch["attention_mask"].to(self.device)
                 label_batch = {k: v.to(self.device) for k, v in batch["labels"].items()}
 
-                # 前向传播
-                if self.use_bf16:
-                    with autocast(dtype=torch.bfloat16):
-                        outputs = self.model(input_ids, attention_mask)
-                        losses = self.criterion(outputs, label_batch)
-                        loss = losses["total"] / self.grad_accum_steps
-                elif self.use_amp:
-                    with autocast():
-                        outputs = self.model(input_ids, attention_mask)
-                        losses = self.criterion(outputs, label_batch)
-                        loss = losses["total"] / self.grad_accum_steps
-                else:
-                    outputs = self.model(input_ids, attention_mask)
-                    losses = self.criterion(outputs, label_batch)
-                    loss = losses["total"] / self.grad_accum_steps
+                # 前向传播：若 torch.compile 在当前 GPU 上不稳定，则自动回退到原始模型
+                forward_success = False
+                last_error = None
+                for attempt in range(2):
+                    try:
+                        if self.use_bf16:
+                            with torch.amp.autocast("cuda", dtype=torch.bfloat16):
+                                outputs = self.model(input_ids, attention_mask)
+                                losses = self.criterion(outputs, label_batch)
+                                loss = losses["total"] / self.grad_accum_steps
+                        elif self.use_amp:
+                            with torch.amp.autocast("cuda", dtype=torch.float16):
+                                outputs = self.model(input_ids, attention_mask)
+                                losses = self.criterion(outputs, label_batch)
+                                loss = losses["total"] / self.grad_accum_steps
+                        else:
+                            outputs = self.model(input_ids, attention_mask)
+                            losses = self.criterion(outputs, label_batch)
+                            loss = losses["total"] / self.grad_accum_steps
+                        forward_success = True
+                        break
+                    except Exception as exc:
+                        last_error = exc
+                        if self._original_model is not None and not self._compile_fallback_used:
+                            self._compile_fallback_used = True
+                            self.model = self._original_model.to(self.device)
+                            self.model.train()
+                            self._log(f"[WARN] torch.compile 在当前设备上不稳定，已自动回退到原始模型: {exc}")
+                            continue
+                        raise
+
+                if not forward_success:
+                    raise last_error
 
                 # 反向传播
                 if self.use_amp:
@@ -811,7 +947,7 @@ class Trainer:
                         self.optimizer.step()
 
                     self.scheduler.step()
-                    self.optimizer.zero_grad()
+                    self.optimizer.zero_grad(set_to_none=True)
                     self.global_step += 1
 
                     # 日志
@@ -893,6 +1029,8 @@ def parse_args():
     p.add_argument("--batch_size", type=int, default=16, help="批次大小")
     p.add_argument("--val_batch_size", type=int, default=32, help="验证批次大小")
     p.add_argument("--num_workers", type=int, default=4, help="数据加载线程数")
+    p.add_argument("--persistent_workers", action="store_true", help="保持 DataLoader worker 常驻，减少 epoch 间重建开销")
+    p.add_argument("--prefetch_factor", type=int, default=2, help="DataLoader 预取批次数；num_workers>0 时生效")
 
     # Hugging Face 数据源
     p.add_argument("--hf_dataset_name", type=str, default=None, help="Hugging Face 数据集名，例如 SUSTech/ChineseSafe")
@@ -914,8 +1052,8 @@ def parse_args():
                    help="Sensitive-lexicon 本地目录；不存在时自动 clone")
     p.add_argument("--lexicon_max_samples", type=int, default=20000,
                    help="词库样本上限，0 表示不限制")
-    p.add_argument("--lexicon_max_ratio", type=float, default=0.95,
-                   help="词库样本占总样本比例上限 (默认0.95，几乎等同全量引入)")
+    p.add_argument("--lexicon_max_ratio", type=float, default=0.40,
+                   help="词库样本占总样本比例上限 (默认0.40/40%%，避免词库数据过度主导训练)")
 
     # 模型
     p.add_argument("--dim", type=int, default=256, help="隐藏维度 (默认256，轻量)")
@@ -941,6 +1079,8 @@ def parse_args():
     p.add_argument("--use_cuda", action="store_true")
     p.add_argument("--use_amp", action="store_true", help="FP16 混合精度")
     p.add_argument("--use_bf16", action="store_true", help="BF16 推理")
+    p.add_argument("--compile_model", action="store_true", help="使用 torch.compile 尝试进一步提速")
+    p.add_argument("--fast_gpu", action="store_true", help="一键启用更激进的 GPU 训练默认值")
 
     # 保存 & 日志
     p.add_argument("--output_dir", type=str, default="./checkpoints")
@@ -956,6 +1096,33 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    if args.fast_gpu:
+        if args.use_cuda:
+            args.use_amp = True if not args.use_bf16 else args.use_amp
+        args.batch_size = max(args.batch_size, 64)
+        args.val_batch_size = max(args.val_batch_size, 128)
+        args.grad_accum_steps = 1
+        args.num_workers = max(args.num_workers, 8)
+        args.persistent_workers = True
+        args.prefetch_factor = max(args.prefetch_factor, 4)
+        args.save_every = max(args.save_every, 2000)
+        args.eval_every = max(args.eval_every, 1000)
+
+    if args.compile_model and importlib.util.find_spec("triton") is None:
+        logger.warning("当前环境未安装 triton，已自动关闭 --compile_model；将继续使用 AMP / fast_gpu 训练。")
+        args.compile_model = False
+
+    if args.use_cuda and torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
+        try:
+            torch.backends.cudnn.benchmark = True
+        except Exception:
+            pass
 
     # 数据源选择: 本地 JSONL 或 Hugging Face
     if args.hf_datasets or args.hf_dataset_name:
@@ -999,13 +1166,29 @@ def main():
     # 构建数据集
     print("\n加载训练数据...")
     train_dataset = AuditDataset(args.train_data, tokenizer, args.max_seq_len)
-    train_loader = create_dataloader(train_dataset, args.batch_size, shuffle=True, num_workers=args.num_workers)
+    train_loader = create_dataloader(
+        train_dataset,
+        args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=args.use_cuda,
+        persistent_workers=args.persistent_workers,
+        prefetch_factor=args.prefetch_factor,
+    )
 
     val_loader = None
     if args.val_data:
         print("加载验证数据...")
         val_dataset = AuditDataset(args.val_data, tokenizer, args.max_seq_len)
-        val_loader = create_dataloader(val_dataset, args.val_batch_size, shuffle=False, num_workers=args.num_workers)
+        val_loader = create_dataloader(
+            val_dataset,
+            args.val_batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=args.use_cuda,
+            persistent_workers=args.persistent_workers,
+            prefetch_factor=args.prefetch_factor,
+        )
 
     # 构建模型
     print("\n初始化模型...")
@@ -1018,6 +1201,11 @@ def main():
         max_seq_len=args.max_seq_len,
         pool_last_weight=args.pool_last_weight,
     )
+    if args.compile_model and hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception as exc:
+            logger.warning(f"torch.compile 启用失败，继续使用原始模型: {exc}")
     print(f"参数量: {model.count_parameters()['total']:,}")
 
     if args.resume_from:

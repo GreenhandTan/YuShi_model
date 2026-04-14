@@ -55,6 +55,43 @@ RISK_LEVEL_TO_ID = {
 ID_TO_RISK_LEVEL = {v: k for k, v in RISK_LEVEL_TO_ID.items()}
 
 
+def validate_label_consistency(
+    is_violation: int,
+    violation_type: str,
+    risk_level: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    验证标签一致性。
+
+    规则:
+    - 如果 is_violation=0，则 violation_type 必须是 "safe"
+    - 如果 violation_type="safe"，则 is_violation 必须是 0
+    - risk_level "safe" 应该对应 is_violation=0
+
+    返回: (is_valid, error_message)
+    """
+    violation_type_lower = str(violation_type).lower().strip()
+    risk_level_lower = str(risk_level).lower().strip()
+
+    # 规则1: 不违规必须是 safe 类型
+    if is_violation == 0 and violation_type_lower != "safe":
+        return False, f"矛盾标签: is_violation=0 但 violation_type={violation_type}"
+
+    # 规则2: safe 类型必须不违规
+    if violation_type_lower == "safe" and is_violation != 0:
+        return False, f"矛盾标签: violation_type=safe 但 is_violation={is_violation}"
+
+    # 规则3: safe 风险等级应对应 is_violation=0
+    if risk_level_lower == "safe" and is_violation != 0:
+        return False, f"矛盾标签: risk_level=safe 但 is_violation={is_violation}"
+
+    # 规则4: 如果违规，风险等级不应为 safe
+    if is_violation == 1 and risk_level_lower == "safe":
+        return False, f"矛盾标签: is_violation=1 但 risk_level=safe"
+
+    return True, None
+
+
 class AuditDataset(Dataset):
     """
     内容审核数据集
@@ -105,12 +142,13 @@ class AuditDataset(Dataset):
 
     def _load_data(self):
         """从 JSONL 文件加载数据"""
+        inconsistent_count = 0
         with open(self.file_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 line = line.strip()
                 if not line:
                     continue
-                
+
                 try:
                     data = json.loads(line)
                 except json.JSONDecodeError as e:
@@ -126,6 +164,18 @@ class AuditDataset(Dataset):
                 vtype_str = str(data.get("violation_type", "safe")).lower()
                 risk_str = str(data.get("risk_level", "safe")).lower()
 
+                # 验证标签一致性
+                is_valid, error_msg = validate_label_consistency(violation_label, vtype_str, risk_str)
+                if not is_valid:
+                    print(f"[WARN] 第 {line_num} 行 - {error_msg}: {text[:50]}")
+                    inconsistent_count += 1
+                    # 尝试自动修复
+                    if violation_label == 0:
+                        vtype_str = "safe"
+                        risk_str = "safe"
+                    elif risk_str == "safe":
+                        risk_str = "low"  # 违规但 risk_level 为 safe，改为 low
+
                 sample = {
                     "text": text,
                     "is_violation": violation_label,
@@ -133,6 +183,9 @@ class AuditDataset(Dataset):
                     "risk_level_id": RISK_LEVEL_TO_ID.get(risk_str, 0),
                 }
                 self.samples.append(sample)
+
+        if inconsistent_count > 0:
+            print(f"[INFO] 检测到 {inconsistent_count} 条不一致的标签，已进行自动修复")
 
     def __len__(self) -> int:
         return len(self.samples)
@@ -186,17 +239,28 @@ def create_dataloader(
     shuffle: bool = True,
     num_workers: int = 4,
     pin_memory: bool = True,
+    persistent_workers: bool = False,
+    prefetch_factor: Optional[int] = 2,
 ) -> DataLoader:
     """创建 DataLoader 的便捷函数"""
     sampler = RandomSampler(dataset) if shuffle else SequentialSampler(dataset)
+    dataloader_kwargs = {
+        "batch_size": batch_size,
+        "sampler": sampler,
+        "num_workers": num_workers,
+        "collate_fn": audit_collate_fn,
+        "pin_memory": pin_memory,
+        "drop_last": shuffle,
+    }
+
+    if num_workers > 0 and persistent_workers:
+        dataloader_kwargs["persistent_workers"] = True
+        if prefetch_factor is not None:
+            dataloader_kwargs["prefetch_factor"] = prefetch_factor
+
     return DataLoader(
         dataset,
-        batch_size=batch_size,
-        sampler=sampler,
-        num_workers=num_workers,
-        collate_fn=audit_collate_fn,
-        pin_memory=pin_memory,
-        drop_last=shuffle,
+        **dataloader_kwargs,
     )
 
 

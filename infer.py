@@ -15,7 +15,7 @@ import json
 import argparse
 import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Optional
 
 import torch
 
@@ -48,6 +48,7 @@ class AuditInferencer:
         batch_size: int = 4,
         enforce_safe_consistency: bool = True,
         violation_conf_threshold: float = 0.30,
+        multi_thresholds: Optional[Dict[str, float]] = None,
     ):
         """
         Args:
@@ -55,6 +56,7 @@ class AuditInferencer:
             vocab_path: 词汇表 JSON 路径
             device: "auto" / "cpu" / "cuda" / "cuda:N"
             use_bf16: 是否 BF16 推理
+            multi_thresholds: 多阈值策略 {"safe": 0.2, "low": 0.3, "medium": 0.4, "high": 0.5, "critical": 0.7}
         """
         self.device = self._resolve_device(device)
         self.use_bf16 = use_bf16 and (self.device.type == "cuda")
@@ -62,6 +64,15 @@ class AuditInferencer:
         self.batch_size = batch_size
         self.enforce_safe_consistency = enforce_safe_consistency
         self.violation_conf_threshold = max(0.0, min(1.0, violation_conf_threshold))
+
+        # 多阈值策略 (默认为基础阈值)
+        self.multi_thresholds = multi_thresholds or {
+            "safe": 0.20,      # 合规内容的阈值低
+            "low": 0.30,
+            "medium": 0.40,
+            "high": 0.50,
+            "critical": 0.70,  # 高危内容要求更高置信度
+        }
 
         # 加载 tokenizer
         print(f"加载词汇表: {vocab_path}")
@@ -103,18 +114,22 @@ class AuditInferencer:
         return torch.device(device)
 
     def _postprocess_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """对推理结果做阈值与一致性后处理。"""
+        """对推理结果做阈值与一致性后处理。支持基于风险等级的多阈值策略。"""
         out = dict(result)
 
         conf = float(out.get("confidence", 0.0))
         pred_violation = bool(out.get("is_violation", False))
+        risk_level = str(out.get("risk_level", "safe")).lower()
+
+        # 获取当前风险等级的阈值 (多阈值策略)
+        threshold = self.multi_thresholds.get(risk_level, self.violation_conf_threshold)
 
         # 当预测为违规但置信度低于阈值时，回退为合规
-        if pred_violation and conf < self.violation_conf_threshold:
+        if pred_violation and conf < threshold:
             out["is_violation"] = False
             out["reason"] = (
-                f"原始违规置信度 {conf:.1%} 低于阈值 {self.violation_conf_threshold:.1%}，"
-                "按阈值策略回退为合规。"
+                f"风险等级 {risk_level} 的违规置信度 {conf:.1%} 低于阈值 {threshold:.1%}，"
+                "按多阈值策略回退为合规。"
             )
 
         # 一致性规则: 合规时强制 risk/type 为 safe
@@ -338,6 +353,8 @@ def parse_args():
     p.add_argument("--num_threads", type=int, default=2, help="CPU 推理线程数")
     p.add_argument("--violation_conf_threshold", type=float, default=0.30,
                    help="违规判定最小置信度阈值 (0~1)。低于阈值的违规将回退为合规")
+    p.add_argument("--multi_thresholds", type=str, default=None,
+                   help="基于风险等级的多阈值策略 (JSON格式)。例: '{\"safe\":0.2,\"low\":0.3,\"medium\":0.4,\"high\":0.5,\"critical\":0.7}'")
     p.add_argument("--disable_safe_consistency", action="store_true",
                    help="关闭一致性后处理（默认开启：合规时强制 risk/type=safe）")
 
@@ -351,6 +368,15 @@ def main():
         torch.set_num_threads(args.num_threads)
         torch.set_num_interop_threads(max(1, min(args.num_threads, 2)))
 
+    # 解析多阈值策略
+    multi_thresholds = None
+    if args.multi_thresholds:
+        try:
+            multi_thresholds = json.loads(args.multi_thresholds)
+        except json.JSONDecodeError:
+            print(f"[ERROR] 无法解析 --multi_thresholds: {args.multi_thresholds}")
+            sys.exit(1)
+
     # 初始化推理器
     engine = AuditInferencer(
         checkpoint_path=args.checkpoint,
@@ -361,6 +387,7 @@ def main():
         batch_size=args.batch_size,
         enforce_safe_consistency=not args.disable_safe_consistency,
         violation_conf_threshold=args.violation_conf_threshold,
+        multi_thresholds=multi_thresholds,
     )
 
     # ---- 分发到各模式 ----

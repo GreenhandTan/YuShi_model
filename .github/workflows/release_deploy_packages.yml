@@ -39,8 +39,8 @@ jobs:
           mkdir -p release_assets
 
           zip -r "release_assets/deploy_${RELEASE_DATE}.zip" deploy \
-            -x "*/__pycache__/*" "*.pyc"
-          tar -czf "release_assets/deploy_${RELEASE_DATE}.tar.gz" deploy
+            -x "*/__pycache__/*" "*.pyc" "deploy/README.md" "deploy/readme.md"
+          tar -czf "release_assets/deploy_${RELEASE_DATE}.tar.gz" --exclude="deploy/README.md" --exclude="deploy/readme.md" deploy
 
           ls -lh release_assets
 
