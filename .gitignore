@@ -39,3 +39,6 @@ env/
 !deploy/checkpoints/*
 !deploy/checkpoints/*.onnx
 !deploy/checkpoints/*.json
+
+# 忽略 VS Code Copilot 规则文件
+.github/copilot-instructions.md
