@@ -69,521 +69,6 @@ logger = setup_logger()
 
 
 # ============================================================
-# Hugging Face 数据集支持
-# ============================================================
-
-SUBJECT_TO_LABELS = {
-    "不违规": ("safe", "safe"),
-    "淫秽色情": ("pornography", "high"),
-    "脏话侮辱": ("abuse", "medium"),
-    "偏见歧视": ("abuse", "medium"),
-    "政治错误": ("politics", "high"),
-    "财产隐私": ("fraud", "high"),
-    "违法犯罪": ("other", "critical"),
-    "身体伤害": ("violence", "high"),
-    "心理健康": ("other", "medium"),
-    "道德伦理": ("other", "low"),
-}
-
-# subject 归一化后同义词映射到标准类目
-SUBJECT_ALIASES = {
-    "不违規": "不违规",
-    "安全": "不违规",
-    "色情": "淫秽色情",
-    "低俗色情": "淫秽色情",
-    "辱骂": "脏话侮辱",
-    "人身攻击": "脏话侮辱",
-    "歧视": "偏见歧视",
-    "偏见": "偏见歧视",
-    "涉政": "政治错误",
-    "政治": "政治错误",
-    "隐私": "财产隐私",
-    "个人隐私": "财产隐私",
-    "犯罪": "违法犯罪",
-    "违法": "违法犯罪",
-    "暴力": "身体伤害",
-    "自残": "身体伤害",
-    "自杀": "身体伤害",
-    "心理": "心理健康",
-    "伦理": "道德伦理",
-}
-
-# 未命中标准类目时的关键词兜底 (带上下文感知)
-KEYWORD_RULES = [
-    # 色情类 - 严格匹配
-    (["色情", "淫秽", "露点", "成人视频", "AV", "18禁"], ("pornography", "high")),
-
-    # 辱骂类
-    (["辱骂", "脏话", "侮辱", "歧视", "仇恨", "傻逼", "妈的"], ("abuse", "medium")),
-
-    # 政治敏感 (排除学术讨论)
-    (["颠覆", "政变", "分裂", "敏感政治", "六四", "港独", "台独"], ("politics", "high")),
-
-    # 欺诈/诈骗
-    (["诈骗", "骗", "钓鱼", "木马", "银行卡", "密码泄露"], ("fraud", "high")),
-
-    # 暴力/血腥
-    (["爆炸", "杀人", "砍", "伤害", "暴力", "恐怖", "恐怖分子"], ("violence", "critical")),
-
-    # 违法犯罪
-    (["赌博", "毒品", "违禁", "走私", "贩毒"], ("other", "high")),
-
-    # 心理健康相关
-    (["焦虑", "抑郁", "自杀", "自伤", "心理"], ("other", "medium")),
-]
-
-CHINESE_HARM_LABEL_TO_TARGET = {
-    "不违规": (0, "safe", "safe"),
-    "低俗色情": (1, "pornography", "high"),
-    "博彩": (1, "other", "high"),       # 修复: 博彩应归类为 "other"，非 "fraud"
-    "欺诈": (1, "fraud", "high"),
-    "谩骂引战": (1, "abuse", "medium"),
-    "黑产广告": (1, "spam", "medium"),
-}
-
-LEXICON_FILENAME_RULES = [
-    (["政治", "gfw", "敏感"], ("politics", "high")),
-    (["色情", "xx", "成人", "AV"], ("pornography", "high")),
-    (["博彩", "赌博"], ("other", "high")),  # 修复: 博彩应该是 "other" 而非 "fraud"
-    (["诈骗", "欺诈"], ("fraud", "high")),
-    (["辱骂", "仇恨", "引战"], ("abuse", "medium")),
-    (["非法网址", "网址", "广告"], ("spam", "medium")),
-    (["暴力", "枪", "炸"], ("violence", "high")),
-]
-
-
-def _normalize_subject(subject: str) -> str:
-    s = str(subject).strip().lower()
-    # 清理空白和常见分隔符，提升匹配鲁棒性
-    s = re.sub(r"[\s\-_/|]+", "", s)
-    return s
-
-
-def _should_filter_keyword_match(text: str, keyword: str) -> bool:
-    """
-    判断关键词匹配是否应该被过滤（即不认为是违规）。
-
-    规则:
-    - 关键词出现在学术/讨论语境中 → 过滤
-    - 关键词被用于否定/警告语境 → 可能过滤
-    - 关键词出现在新闻/新闻标题中 → 过滤
-
-    返回 True 表示应该过滤此匹配。
-    """
-    # 找到关键词在文本中的位置
-    idx = text.find(keyword)
-    if idx == -1:
-        return False
-
-    # 提取前后各50个字符的上下文
-    start = max(0, idx - 50)
-    end = min(len(text), idx + len(keyword) + 50)
-    context = text[start:end]
-
-    # 过滤条件
-    filter_patterns = [
-        # 学术/讨论语境
-        r"讨论|研究|分析|学|科学|理论|观点|看法|意见",
-        # 否定语境
-        r"不支持|反对|谴责|禁止|不允许|非法",
-        # 新闻语境
-        r"报道|新闻|消息|据悉|日前|今日",
-        # 信息性语境
-        r"词典|定义|解释|意思是|指的是",
-    ]
-
-    for pattern in filter_patterns:
-        if re.search(pattern, context):
-            return True
-
-    return False
-
-
-def _parse_violation_label(label_value) -> int:
-    text = str(label_value).strip().lower()
-    if text in {"违规", "1", "true", "yes", "unsafe", "violation"}:
-        return 1
-    if text in {"不违规", "0", "false", "no", "safe", "non-violation"}:
-        return 0
-    return 0
-
-
-def _map_subject_to_labels(subject: str, is_violation: int):
-    if not is_violation:
-        return "safe", "safe"
-
-    raw_subject = str(subject).strip()
-    normalized = _normalize_subject(raw_subject)
-
-    # 1) 精确命中标准类目
-    if raw_subject in SUBJECT_TO_LABELS:
-        return SUBJECT_TO_LABELS[raw_subject]
-
-    # 2) 同义词映射到标准类目
-    canonical_subject = SUBJECT_ALIASES.get(normalized)
-    if canonical_subject and canonical_subject in SUBJECT_TO_LABELS:
-        return SUBJECT_TO_LABELS[canonical_subject]
-
-    # 3) 关键词兜底
-    for keywords, mapped in KEYWORD_RULES:
-        if any(k in raw_subject for k in keywords):
-            return mapped
-
-    # 未知违规子类兜底到 other
-    return "other", "medium"
-
-
-def _write_jsonl(path: Path, rows: List[Dict]):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-
-def _load_jsonl_rows(path: str) -> List[Dict]:
-    rows: List[Dict] = []
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            rows.append(json.loads(line))
-    return rows
-
-
-def _augment_rows_with_sensitive_lexicon(rows: List[Dict], args: argparse.Namespace, seed: int, log_prefix: str) -> List[Dict]:
-    if not args.add_sensitive_lexicon:
-        return rows
-
-    base_rows_count = len(rows)
-    lexicon_rows = _load_sensitive_lexicon_rows(args)
-    if not lexicon_rows:
-        logger.warning(f"[{log_prefix}] 未合并任何词库样本")
-        return rows
-
-    ratio = min(max(args.lexicon_max_ratio, 0.0), 0.50)
-    # 约束: lexicon / (base + lexicon) <= ratio
-    # 推导: lexicon <= ratio/(1-ratio) * base
-    allowed_lexicon = int(base_rows_count * ratio / max(1e-8, 1.0 - ratio))
-
-    if allowed_lexicon <= 0:
-        logger.info(f"[{log_prefix}] 词库比例上限过低，已跳过词库样本")
-        return rows
-
-    if len(lexicon_rows) > allowed_lexicon:
-        rng_local = random.Random(seed + 7)
-        rng_local.shuffle(lexicon_rows)
-        lexicon_rows = lexicon_rows[:allowed_lexicon]
-        logger.info(
-            f"[{log_prefix}] 按比例上限截断词库样本: {allowed_lexicon} 条 "
-            f"(max_ratio={ratio:.2f})"
-        )
-
-    rows = list(rows)
-    rows.extend(lexicon_rows)
-    logger.info(f"[{log_prefix}] 已合并词库样本: {len(lexicon_rows)} 条")
-    return rows
-
-
-def _compute_violation_class_weights(dataset: AuditDataset) -> torch.Tensor:
-    """根据训练集分布计算违规二分类权重。"""
-    total = len(dataset)
-    violation_count = sum(int(sample["is_violation"]) for sample in dataset.samples)
-    safe_count = total - violation_count
-
-    safe_weight = total / (2.0 * max(safe_count, 1))
-    violation_weight = total / (2.0 * max(violation_count, 1))
-    return torch.tensor([safe_weight, violation_weight], dtype=torch.float32)
-
-
-def _compute_risk_level_class_weights(dataset: AuditDataset) -> torch.Tensor:
-    """根据训练集分布计算风险等级多分类权重 (5 类: safe/low/medium/high/critical)。"""
-    from dataset import RISK_LEVEL_TO_ID, ID_TO_RISK_LEVEL
-
-    total = len(dataset)
-    risk_counts = {i: 0 for i in range(5)}
-
-    for sample in dataset.samples:
-        risk_id = sample["risk_level_id"]
-        risk_counts[risk_id] += 1
-
-    weights = []
-    for i in range(5):
-        count = max(risk_counts[i], 1)
-        weight = total / (5.0 * count)  # 5 = 类别数
-        weights.append(weight)
-
-    return torch.tensor(weights, dtype=torch.float32)
-
-
-def _compute_violation_type_class_weights(dataset: AuditDataset) -> torch.Tensor:
-    """根据训练集分布计算违规类型多分类权重 (8 类: safe/politics/...)。"""
-    total = len(dataset)
-    type_counts = {i: 0 for i in range(8)}
-
-    for sample in dataset.samples:
-        type_id = sample["violation_type_id"]
-        type_counts[type_id] += 1
-
-    weights = []
-    for i in range(8):
-        count = max(type_counts[i], 1)
-        weight = total / (8.0 * count)  # 8 = 类别数
-        weights.append(weight)
-
-    return torch.tensor(weights, dtype=torch.float32)
-
-
-def _parse_dataset_specs(dataset_specs: str) -> List[Dict[str, str]]:
-    """
-    解析多数据集配置字符串。
-
-    格式:
-      dataset|split|text_field|label_field|subject_field
-    多个数据集使用逗号分隔。
-    """
-    results = []
-    if not dataset_specs:
-        return results
-
-    for raw in dataset_specs.split(","):
-        part = raw.strip()
-        if not part:
-            continue
-
-        segs = [s.strip() for s in part.split("|")]
-        if len(segs) < 2:
-            raise ValueError(
-                "--hf_datasets 格式错误，应为 name|split|text_field|label_field|subject_field"
-            )
-
-        name = segs[0]
-        split = segs[1]
-        text_field = segs[2] if len(segs) > 2 and segs[2] else "text"
-        label_field = segs[3] if len(segs) > 3 and segs[3] else "label"
-        subject_field = segs[4] if len(segs) > 4 and segs[4] else "subject"
-
-        results.append({
-            "name": name,
-            "split": split,
-            "text_field": text_field,
-            "label_field": label_field,
-            "subject_field": subject_field,
-        })
-
-    return results
-
-
-def _ensure_sensitive_lexicon_repo(args: argparse.Namespace) -> Optional[Path]:
-    if not args.add_sensitive_lexicon:
-        return None
-
-    repo_dir = Path(args.lexicon_repo_dir)
-    if (repo_dir / "Vocabulary").exists() or (repo_dir / "Organized").exists():
-        return repo_dir
-
-    repo_dir.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"[LEXICON] 克隆词库仓库: {args.lexicon_repo_url} -> {repo_dir}")
-    subprocess.run(
-        ["git", "clone", "--depth", "1", args.lexicon_repo_url, str(repo_dir)],
-        check=True,
-    )
-    return repo_dir
-
-
-def _map_lexicon_file_to_labels(file_name: str):
-    low_name = file_name.lower()
-    for keys, mapped in LEXICON_FILENAME_RULES:
-        if any(k in low_name for k in keys):
-            return mapped
-    return "other", "medium"
-
-
-def _load_sensitive_lexicon_rows(args: argparse.Namespace) -> List[Dict]:
-    repo_dir = _ensure_sensitive_lexicon_repo(args)
-    if repo_dir is None:
-        return []
-
-    roots = [repo_dir / "Vocabulary", repo_dir / "Organized"]
-    txt_files = []
-    for root in roots:
-        if root.exists():
-            txt_files.extend(sorted(root.rglob("*.txt")))
-
-    if not txt_files:
-        logger.warning("[LEXICON] 未发现词库 txt 文件，跳过")
-        return []
-
-    max_samples = args.lexicon_max_samples
-    rows = []
-    seen = set()
-
-    for fp in txt_files:
-        violation_type, risk_level = _map_lexicon_file_to_labels(fp.name)
-
-        try:
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
-                    text = line.strip()
-                    if not text or text.startswith("#"):
-                        continue
-                    if len(text) < 2:
-                        continue
-                    if text in seen:
-                        continue
-
-                    seen.add(text)
-                    rows.append({
-                        "text": text,
-                        "is_violation": 1,
-                        "violation_type": violation_type,
-                        "risk_level": risk_level,
-                        "source": f"Sensitive-lexicon/{fp.relative_to(repo_dir).as_posix()}",
-                        "subject": fp.stem,
-                        "raw_label": fp.name,
-                    })
-
-                    if max_samples > 0 and len(rows) >= max_samples:
-                        logger.info(f"[LEXICON] 达到样本上限: {max_samples}")
-                        return rows
-        except OSError as e:
-            logger.warning(f"[LEXICON] 读取失败: {fp} ({e})")
-
-    return rows
-
-
-def _map_harm_label_to_targets(label_text: str):
-    key = str(label_text).strip()
-    if key in CHINESE_HARM_LABEL_TO_TARGET:
-        return CHINESE_HARM_LABEL_TO_TARGET[key]
-
-    # 兜底
-    if key == "不违规":
-        return 0, "safe", "safe"
-    return 1, "other", "medium"
-
-
-def _convert_hf_dataset(
-    dataset_name: str,
-    split: str,
-    text_field: str,
-    label_field: str,
-    subject_field: str,
-    max_samples: int,
-):
-    from datasets import load_dataset
-
-    logger.info(f"[HF] 加载数据集: {dataset_name} split={split}")
-    ds = load_dataset(dataset_name, split=split)
-
-    if max_samples > 0:
-        limit = min(max_samples, len(ds))
-        ds = ds.select(range(limit))
-        logger.info(f"[HF] {dataset_name} 仅使用前 {limit} 条样本")
-
-    rows = []
-    for item in ds:
-        text = str(item.get(text_field, "")).strip()
-        if not text:
-            continue
-
-        if dataset_name.lower() == "zjunlp/chineseharm-bench":
-            raw_label = str(item.get(label_field, "不违规")).strip()
-            is_violation, violation_type, risk_level = _map_harm_label_to_targets(raw_label)
-            subject = raw_label
-        else:
-            is_violation = _parse_violation_label(item.get(label_field, "不违规"))
-            subject = str(item.get(subject_field, "不违规"))
-            violation_type, risk_level = _map_subject_to_labels(subject, is_violation)
-            raw_label = str(item.get(label_field, ""))
-
-        rows.append({
-            "text": text,
-            "is_violation": int(is_violation),
-            "violation_type": violation_type,
-            "risk_level": risk_level,
-            "source": f"{dataset_name}/{split}",
-            "subject": subject,
-            "raw_label": raw_label,
-        })
-
-    return rows
-
-
-def build_jsonl_from_hf(args: argparse.Namespace):
-    try:
-        from datasets import load_dataset
-    except ImportError as e:
-        raise ImportError(
-            "未安装 datasets，请先执行: pip install datasets"
-        ) from e
-
-    rows = []
-    specs = _parse_dataset_specs(args.hf_datasets)
-
-    if specs:
-        for spec in specs:
-            part_rows = _convert_hf_dataset(
-                dataset_name=spec["name"],
-                split=spec["split"],
-                text_field=spec["text_field"],
-                label_field=spec["label_field"],
-                subject_field=spec["subject_field"],
-                max_samples=args.hf_max_samples,
-            )
-            rows.extend(part_rows)
-            logger.info(f"[HF] 已合并 {spec['name']} 样本: {len(part_rows)} 条")
-    else:
-        part_rows = _convert_hf_dataset(
-            dataset_name=args.hf_dataset_name,
-            split=args.hf_split,
-            text_field=args.hf_text_field,
-            label_field=args.hf_label_field,
-            subject_field=args.hf_subject_field,
-            max_samples=args.hf_max_samples,
-        )
-        rows.extend(part_rows)
-        logger.info(f"[HF] 已读取样本: {len(part_rows)} 条")
-
-    if not rows:
-        raise RuntimeError("从 Hugging Face 数据集中未解析到有效样本")
-
-    rows = _augment_rows_with_sensitive_lexicon(rows, args, seed=args.hf_seed, log_prefix="HF")
-
-    rng = random.Random(args.hf_seed)
-    rng.shuffle(rows)
-
-    val_ratio = min(max(args.hf_val_ratio, 0.0), 0.5)
-    val_size = int(len(rows) * val_ratio)
-    if val_ratio > 0 and val_size == 0 and len(rows) > 1:
-        val_size = 1
-
-    if val_size > 0:
-        val_rows = rows[:val_size]
-        train_rows = rows[val_size:]
-    else:
-        val_rows = []
-        train_rows = rows
-
-    if not train_rows:
-        raise RuntimeError("训练集为空，请降低 --hf_val_ratio 或增加 --hf_max_samples")
-
-    output_dir = Path(args.output_dir)
-    train_path = output_dir / "hf_train.jsonl"
-    val_path = output_dir / "hf_val.jsonl"
-
-    _write_jsonl(train_path, train_rows)
-    logger.info(f"[HF] 训练集已写入: {train_path} ({len(train_rows)} 条)")
-
-    if val_rows:
-        _write_jsonl(val_path, val_rows)
-        logger.info(f"[HF] 验证集已写入: {val_path} ({len(val_rows)} 条)")
-        return str(train_path), str(val_path)
-
-    return str(train_path), None
-
-
-# ============================================================
 # 学习率调度器
 # ============================================================
 
@@ -600,14 +85,30 @@ def get_cosine_schedule_with_warmup(optimizer, num_warmup_steps, num_training_st
 # 多任务损失计算
 # ============================================================
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss: 处理类别严重不平衡和困难样本
+    能让模型自动去死磕那些“看似安全实际违规”的伪装文本，或“看似违规实际正常”的闲聊
+    """
+    def __init__(self, weight=None, gamma=2.0, label_smoothing=0.0):
+        super().__init__()
+        self.ce = nn.CrossEntropyLoss(weight=weight, label_smoothing=label_smoothing, reduction='none')
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        ce_loss = self.ce(inputs, targets)
+        pt = torch.exp(-ce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * ce_loss
+        return focal_loss.mean()
+
 class AuditLoss(nn.Module):
     """
     多任务审核损失
     
     组合四个子任务的加权损失:
-    - violation_loss: 是否违规 (二元交叉熵, 较高权重 — 核心指标)
-    - risk_loss: 风险等级分类 (交叉熵)
-    - type_loss: 违规类型分类 (交叉熵)
+    - violation_loss: 是否违规 (Focal Loss, 较高权重 — 核心指标)
+    - risk_loss: 风险等级分类 (加权交叉熵 + 标签平滑)
+    - type_loss: 违规类型分类 (加权交叉熵 + 标签平滑)
     """
 
     def __init__(
@@ -624,10 +125,11 @@ class AuditLoss(nn.Module):
         self.w_risk = risk_weight
         self.w_type = type_weight
 
-        self.ce = nn.CrossEntropyLoss()
-        self.violation_ce = nn.CrossEntropyLoss(weight=violation_class_weights)
-        self.risk_ce = nn.CrossEntropyLoss(weight=risk_class_weights)
-        self.type_ce = nn.CrossEntropyLoss(weight=type_class_weights)
+        # 违规二分类引入 Focal Loss (gamma=2.0)，强迫模型专注于最难分对的擦边球和日常闲聊误杀
+        self.violation_ce = FocalLoss(weight=violation_class_weights, gamma=2.0, label_smoothing=0.0)
+        # 多分类引入 Label Smoothing (0.05)，防止模型过度自信产生误伤
+        self.risk_ce = nn.CrossEntropyLoss(weight=risk_class_weights, label_smoothing=0.05)
+        self.type_ce = nn.CrossEntropyLoss(weight=type_class_weights, label_smoothing=0.05)
         self.bce = nn.BCEWithLogitsLoss()
 
     def forward(
@@ -739,6 +241,42 @@ def evaluate(
 # ============================================================
 
 
+
+import numpy as np
+
+def _compute_violation_class_weights(dataset):
+    counts = [0, 0]
+    for sample in dataset.samples:
+        is_vio = sample.get("is_violation", 0)
+        counts[is_vio] += 1
+    total = sum(counts)
+    if min(counts) == 0:
+        return torch.tensor([1.0, 1.0], dtype=torch.float)
+    # Weights proportional to inverse class frequency
+    weights = [total / (2.0 * c) for c in counts]
+    return torch.tensor(weights, dtype=torch.float)
+
+def _compute_risk_level_class_weights(dataset):
+    counts = [0]*5
+    for sample in dataset.samples:
+        r_level = sample.get("risk_level_id", 0)
+        counts[r_level] += 1
+    total = sum(counts)
+    non_zero_classes = sum(1 for c in counts if c > 0)
+    weights = [total / (non_zero_classes * c) if c > 0 else 0.0 for c in counts]
+    return torch.tensor(weights, dtype=torch.float)
+
+def _compute_violation_type_class_weights(dataset):
+    counts = [0]*8
+    for sample in dataset.samples:
+        v_type = sample.get("violation_type_id", 0)
+        counts[v_type] += 1
+    total = sum(counts)
+    non_zero_classes = sum(1 for c in counts if c > 0)
+    weights = [total / (non_zero_classes * c) if c > 0 else 0.0 for c in counts]
+    return torch.tensor(weights, dtype=torch.float)
+
+
 class Trainer:
     """内容审核模型训练器"""
 
@@ -824,7 +362,15 @@ class Trainer:
             {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)],
              "weight_decay": 0.0},
         ]
-        self.optimizer = AdamW(param_groups, lr=self.lr, eps=1e-8)
+        
+        import inspect
+        use_fused = 'fused' in inspect.signature(AdamW).parameters and self.device.type == 'cuda'
+        if use_fused:
+            self.optimizer = AdamW(param_groups, lr=self.lr, eps=1e-8, fused=True)
+            self._log("  [Opt] 已开启 Fused AdamW 优化，加速大模型参数更新底座")
+        else:
+            self.optimizer = AdamW(param_groups, lr=self.lr, eps=1e-8)
+            
         self.optimizer.zero_grad(set_to_none=True)
 
         total_steps = len(train_loader) // self.grad_accum_steps * self.epochs
@@ -1032,29 +578,6 @@ def parse_args():
     p.add_argument("--persistent_workers", action="store_true", help="保持 DataLoader worker 常驻，减少 epoch 间重建开销")
     p.add_argument("--prefetch_factor", type=int, default=2, help="DataLoader 预取批次数；num_workers>0 时生效")
 
-    # Hugging Face 数据源
-    p.add_argument("--hf_dataset_name", type=str, default=None, help="Hugging Face 数据集名，例如 SUSTech/ChineseSafe")
-    p.add_argument("--hf_datasets", type=str, default=None,
-                   help="多个HF数据集配置，格式: name|split|text|label|subject,name2|split2|text2|label2|subject2")
-    p.add_argument("--hf_split", type=str, default="test", help="Hugging Face split 名")
-    p.add_argument("--hf_text_field", type=str, default="text", help="Hugging Face 文本字段名")
-    p.add_argument("--hf_label_field", type=str, default="label", help="Hugging Face 违规标签字段名")
-    p.add_argument("--hf_subject_field", type=str, default="subject", help="Hugging Face 子类型字段名")
-    p.add_argument("--hf_val_ratio", type=float, default=0.1, help="HF 数据随机划分验证集比例")
-    p.add_argument("--hf_seed", type=int, default=42, help="HF 数据划分随机种子")
-    p.add_argument("--hf_max_samples", type=int, default=0, help="HF 样本数上限，0 表示使用全部")
-
-    # Sensitive-lexicon 词库增强
-    p.add_argument("--add_sensitive_lexicon", action="store_true", help="将 Sensitive-lexicon 词库样本并入训练集")
-    p.add_argument("--lexicon_repo_url", type=str, default="https://github.com/konsheng/Sensitive-lexicon.git",
-                   help="Sensitive-lexicon 仓库地址")
-    p.add_argument("--lexicon_repo_dir", type=str, default="./external/Sensitive-lexicon",
-                   help="Sensitive-lexicon 本地目录；不存在时自动 clone")
-    p.add_argument("--lexicon_max_samples", type=int, default=20000,
-                   help="词库样本上限，0 表示不限制")
-    p.add_argument("--lexicon_max_ratio", type=float, default=0.40,
-                   help="词库样本占总样本比例上限 (默认0.40/40%%，避免词库数据过度主导训练)")
-
     # 模型
     p.add_argument("--dim", type=int, default=256, help="隐藏维度 (默认256，轻量)")
     p.add_argument("--n_layers", type=int, default=6, help="Transformer 层数")
@@ -1124,27 +647,8 @@ def main():
         except Exception:
             pass
 
-    # 数据源选择: 本地 JSONL 或 Hugging Face
-    if args.hf_datasets or args.hf_dataset_name:
-        train_path, val_path = build_jsonl_from_hf(args)
-        args.train_data = train_path
-        if args.val_data is None:
-            args.val_data = val_path
-    elif not args.train_data:
-        raise ValueError("请提供 --train_data，或提供 --hf_dataset_name 使用 Hugging Face 数据集")
-    else:
-        if args.add_sensitive_lexicon:
-            local_rows = _load_jsonl_rows(args.train_data)
-            local_rows = _augment_rows_with_sensitive_lexicon(
-                local_rows,
-                args,
-                seed=args.hf_seed,
-                log_prefix="LOCAL",
-            )
-            augmented_train_path = Path(args.output_dir) / "local_train_augmented.jsonl"
-            _write_jsonl(augmented_train_path, local_rows)
-            args.train_data = str(augmented_train_path)
-            logger.info(f"[LOCAL] 训练集已写入增强版本: {augmented_train_path} ({len(local_rows)} 条)")
+    if not args.train_data:
+        raise ValueError("请提供 --train_data 选项指定本地训练数据文件")
 
     # 构建 tokenizer
     if args.vocab_file and Path(args.vocab_file).exists():

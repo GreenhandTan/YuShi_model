@@ -94,13 +94,23 @@ class Attention(nn.Module):
         cos, sin = self.rope(T)
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
-        attn = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        # 极致提速核心: PyTorch 原生 Scaled Dot-Product Attention (自动调用底层 FlashAttention 内核)
+        # 能节省近一半显存并带来肉眼可见的最大化吞吐提升
+        p = self.dropout.p if self.training else 0.0
+        
         if mask is not None:
-            attn = attn + mask
-        attn = F.softmax(attn, dim=-1)
-        attn = self.dropout(attn)
+            out = F.scaled_dot_product_attention(
+                q, k, v,
+                attn_mask=mask,
+                dropout_p=p
+            )
+        else:
+            out = F.scaled_dot_product_attention(
+                q, k, v,
+                is_causal=True,
+                dropout_p=p
+            )
 
-        out = torch.matmul(attn, v)
         out = out.transpose(1, 2).contiguous().view(B, T, C)
         return self.o_proj(out)
 
@@ -143,7 +153,7 @@ class TransformerBlock(nn.Module):
 AUDIT_LABELS = {
     "is_violation": "是否违规",
     "risk_level": "风险等级 (safe/low/medium/high/critical)",
-    "violation_type": "违规类型 (politics/pornography/violence/fraud/spam/other/safe)",
+    "violation_type": "违规类型 (politics/pornography/violence/fraud/spam/abuse/other/safe)",
     "confidence": "置信度 (0.0~1.0)",
     "reason": "审核理由说明",
 }
@@ -232,7 +242,8 @@ class ContentAuditExpert(nn.Module):
 
         # 违规类型分类 (8 类: safe + 7种违规)
         self.type_head = nn.Linear(hidden_size, len(VIOLATION_TYPES))
-
+        # 参数稳定化 Dropout(用于抗过拟合提升内容审核模型泛化边界)
+        self.head_dropout = nn.Dropout(min(dropout + 0.1, 0.4))
         # 置信度回归 (单值)
         self.confidence_head = nn.Sequential(
             nn.Linear(hidden_size, hidden_size // 2),
@@ -322,12 +333,13 @@ class ContentAuditExpert(nn.Module):
         """
         hidden_states = self._encode(input_ids, attention_mask)
         pooled = self._pool(hidden_states, attention_mask)
+        pooled_dropped = self.head_dropout(pooled)
 
         return {
-            "violation_logits": self.violation_head(pooled),      # (B, 2)
-            "risk_logits": self.risk_head(pooled),                # (B, 5)
-            "type_logits": self.type_head(pooled),                # (B, 7)
-            "confidence": self.confidence_head(pooled).squeeze(-1),  # (B,)
+            "violation_logits": self.violation_head(pooled_dropped),      # (B, 2)
+            "risk_logits": self.risk_head(pooled_dropped),                # (B, 5)
+            "type_logits": self.type_head(pooled_dropped),                # (B, 7)
+            "confidence": self.confidence_head(pooled_dropped).squeeze(-1),  # (B,)
         }
 
     @torch.inference_mode()
