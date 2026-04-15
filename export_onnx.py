@@ -52,8 +52,10 @@ def main() -> None:
 
     wrapper = OnnxWrapper(model).eval()
 
-    dummy_input_ids = torch.ones((1, args.max_length), dtype=torch.long)
-    dummy_attention_mask = torch.ones((1, args.max_length), dtype=torch.long)
+    dummy_input_ids = torch.randint(0, tokenizer.vocab_size, (2, args.max_length), dtype=torch.long)
+    dummy_attention_mask = torch.zeros((2, args.max_length), dtype=torch.long)
+    dummy_attention_mask[0, :args.max_length] = 1
+    dummy_attention_mask[1, :args.max_length // 2] = 1
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
