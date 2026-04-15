@@ -98,11 +98,14 @@ class AuditONNXInferencer:
         conf = float(out.get("confidence", 0.0))
         pred_violation = bool(out.get("is_violation", False))
 
+        # 优化点 3: 这里的阈值过滤不再是简单依靠额外的 Regression 头，而是真实概率的过滤。
+        # 允许外部（如 api_server）发送 0.2 或 0.8 的置信度强行降低/升高防御门槛。
+        # 但目前 _postprocess 仅实现向下的“释放”，向上的“查杀”刚才已经在 batch 解析中由 Safety Net 接管。
         if pred_violation and conf < self.violation_conf_threshold:
             out["is_violation"] = False
             out["reason"] = (
-                f"原始违规置信度 {conf:.1%} 低于阈值 {self.violation_conf_threshold:.1%}，"
-                "按阈值策略回退为合规。"
+                f"原违规概率为 {conf:.1%} 低于配置拦截阈值 {self.violation_conf_threshold:.1%}，"
+                "已被策略放行（强制转换为合规）。"
             )
 
         if self.enforce_safe_consistency and not bool(out.get("is_violation", False)):
@@ -124,21 +127,46 @@ class AuditONNXInferencer:
             violation_logits, risk_logits, type_logits, confidence = outputs
 
             for j, text in enumerate(chunk):
+                # 优化点 1: 加入基于概率的置信度，而不仅是僵硬的 argmax
+                # 使用 Pytorch softmax 逻辑近似计算违规概率
+                v_logits = violation_logits[j]
+                exp_v = np.exp(v_logits - np.max(v_logits))
+                v_probs = exp_v / np.sum(exp_v)
+                violation_prob = v_probs[1]
+                
+                # 初始判定（如果有明确设置置信度，可调节，此处我们默认依赖 0.5 基础判定，后面做进一步逻辑收敛）
                 is_violation = int(np.argmax(violation_logits[j])) == 1
+                
+                # 获取其他维度的信息
                 risk_level = RISK_LEVELS[int(np.argmax(risk_logits[j]))]
                 violation_type = VIOLATION_TYPES[int(np.argmax(type_logits[j]))]
-                conf = float(confidence[j])
+                
+                # 优化点 2: 引入“保底安全网”（Safety Net Enforcement）
+                # 即使模型在二分类头上没有超过阈值，但它风险头上极度认为该片段不安全（高/极度风险）
+                # 或者打标打出了极其负面的类型（如涉政），则全线拉起警报！极大强化模型的拦截上限！
+                if not is_violation:
+                    if risk_level in ["high", "critical"] or violation_type in ["politics", "pornography", "abuse"]:
+                        is_violation = True
+                
+                # 返回真实的交叉熵混合置信度，不再使用之前僵硬单层的单独输出
+                # 如果判定为违规，取违规的概率，否则取不违规(0)的概率，作为更真实的报告
+                real_confidence = float(violation_prob) if is_violation else float(v_probs[0])
+                
+                # 如果最终依然是合规，严格对齐附属输出
+                if not is_violation:
+                    risk_level = "safe"
+                    violation_type = "safe"
 
                 result = {
                     "is_violation": bool(is_violation),
                     "risk_level": risk_level,
-                    "violation_type": violation_type if is_violation else "safe",
-                    "confidence": round(conf, 4),
+                    "violation_type": violation_type,
+                    "confidence": round(real_confidence, 4),
                     "reason": self._build_reason(
                         is_violation=bool(is_violation),
                         risk_level=risk_level,
-                        vtype=violation_type if is_violation else "safe",
-                        confidence=conf,
+                        vtype=violation_type,
+                        confidence=real_confidence,
                     ),
                 }
                 results.append(self._postprocess(result))
