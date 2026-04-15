@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 import os
 from typing import List, Optional
 
@@ -8,14 +8,14 @@ from pydantic import BaseModel, Field
 from infer_onnx import AuditONNXInferencer
 
 BASE_DIR = Path(__file__).resolve().parent
-_LOCAL_CKPT = BASE_DIR / "checkpoints_final_9to1" / "best.pt"
-_LOCAL_VOCAB = BASE_DIR / "checkpoints_final_9to1" / "vocab.json"
+_LOCAL_CKPT = BASE_DIR / "checkpoints" / "best.pt"
+_LOCAL_VOCAB = BASE_DIR / "checkpoints" / "vocab.json"
 _DEPLOY_ONNX = BASE_DIR / "checkpoints" / "model.onnx"
 _DEPLOY_VOCAB = BASE_DIR / "checkpoints" / "vocab.json"
 
 DEFAULT_ONNX_MODEL = os.getenv(
     "ONNX_MODEL_PATH",
-    str(_DEPLOY_ONNX if _DEPLOY_ONNX.exists() else BASE_DIR / "checkpoints_final_9to1" / "model.onnx"),
+    str(_DEPLOY_ONNX if _DEPLOY_ONNX.exists() else BASE_DIR / "checkpoints" / "model.onnx"),
 )
 DEFAULT_VOCAB = os.getenv(
     "VOCAB_PATH",
