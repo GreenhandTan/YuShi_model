@@ -134,18 +134,18 @@ class AuditONNXInferencer:
                 v_probs = exp_v / np.sum(exp_v)
                 violation_prob = v_probs[1]
                 
-                # 初始判定（如果有明确设置置信度，可调节，此处我们默认依赖 0.5 基础判定，后面做进一步逻辑收敛）
-                is_violation = int(np.argmax(violation_logits[j])) == 1
-                
+                # 初始判定：基于概率阈值，取代死板的 argmax 0.5
+                is_violation = bool(violation_prob >= 0.4)
+
                 # 获取其他维度的信息
                 risk_level = RISK_LEVELS[int(np.argmax(risk_logits[j]))]
                 violation_type = VIOLATION_TYPES[int(np.argmax(type_logits[j]))]
-                
+
                 # 优化点 2: 引入“保底安全网”（Safety Net Enforcement）
-                # 即使模型在二分类头上没有超过阈值，但它风险头上极度认为该片段不安全（高/极度风险）
-                # 或者打标打出了极其负面的类型（如涉政），则全线拉起警报！极大强化模型的拦截上限！
+                # 即使模型在二分类头上没有超过阈值，但它风险头上认为该片段不安全（中度及以上）
+                # 或者打标打出了极其负面的类型，则全线拉起警报！
                 if not is_violation:
-                    if risk_level in ["high", "critical"] or violation_type in ["politics", "pornography", "abuse"]:
+                    if risk_level in ["medium", "high", "critical"] or violation_type in ["politics", "pornography", "abuse", "illegal"]:
                         is_violation = True
                 
                 # 返回真实的交叉熵混合置信度，不再使用之前僵硬单层的单独输出
