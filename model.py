@@ -381,6 +381,10 @@ class ContentAuditExpert(nn.Module):
         # 风险等级
         risk_idx = outputs["risk_logits"].argmax(dim=-1).item()
         risk_level = RISK_LEVELS[risk_idx]
+        
+        # 强逻辑约束：如果不违规，则风险等级强制为 safe
+        if not is_violation:
+            risk_level = "safe"
 
         # 违规类型
         type_idx = outputs["type_logits"].argmax(dim=-1).item()
@@ -453,6 +457,8 @@ class ContentAuditExpert(nn.Module):
             for j in range(len(batch_texts)):
                 is_violation = outputs["violation_logits"][j].argmax().item() == 1
                 risk_level = RISK_LEVELS[outputs["risk_logits"][j].argmax().item()]
+                if not is_violation:
+                    risk_level = "safe"
                 violation_type = VIOLATION_TYPES[outputs["type_logits"][j].argmax().item()]
                 confidence = round(outputs["confidence"][j].item(), 4)
                 reason = self._build_reason(
