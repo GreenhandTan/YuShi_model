@@ -1,5 +1,0 @@
-# CPU 训练和推理（不需要 CUDA）
-torch>=2.1.0
-datasets>=2.14.0
-wandb>=0.17.0
-numpy>=1.24.0
