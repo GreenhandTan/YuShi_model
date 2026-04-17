@@ -31,14 +31,54 @@ env/
 *.bin
 *.onnx
 
-# 完全忽略根目录下的本地训练模型输出目录
-/checkpoints/
+# 允许根目录下 checkpoints 中的模型文件和词汇表
+/checkpoints/*
+!/checkpoints/model.onnx
+!/checkpoints/vocab.json
+
+# VS Code Copilot
+.github/copilot-instructions.md
+# 忽略所有文件夹中的数据集和外部依赖
+data/
+outputs/
+wandb/
+DataSet/
+external/
+reports/
+scripts/
+
+# 忽略临时和中间产�?
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ipynb_checkpoints/
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# ---------------------------------------------
+# 模型文件处理规则 (仅保留必要的模型文件入库)
+# ---------------------------------------------
+# 默认忽略所有权重和中间检查点文件
+*.pt
+*.bin
+*.onnx
+
+# 完全忽略根目录下的本地训练模型输出目�?
+
 
 # 显式允许deploy文件夹下的所有用于发布的模型文件
-!deploy/checkpoints/
-!deploy/checkpoints/*
-!deploy/checkpoints/*.onnx
-!deploy/checkpoints/*.json
+!deploy
+!deploy*
+!deploy*.onnx
+!deploy*.json
 
 # VS Code Copilot
 .github/copilot-instructions.md
