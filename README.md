@@ -66,13 +66,13 @@
 **仅 CPU 推理和训练：**
 
 ```bash
-pip install -r requirements-cpu.txt
+pip install -r requirements-train-cpu.txt
 ```
 
 **GPU 训练和推理（CUDA 11.8）：**
 
 ```bash
-pip install -r requirements-gpu.txt
+pip install -r requirements-train-gpu.txt
 ```
 
 **其他 CUDA 版本（GPU）：**
@@ -158,16 +158,16 @@ python infer.py \
 
 目前本仓库采用部署与训练分离策略：
 - 本地训练：维护和使用 PyTorch 原生脚本（`train.py` + `checkpoints/*.pt` 等）
-- 目标发布：将导出的高速 ONNX 推理文件置于 `deploy/checkpoints` 目录下独立运行不依赖庞大的构建脚本
+- 目标发布：将导出的高速 ONNX 推理文件及其他核心脚本更新在根目录，由工作流自动提取所需文件进行打包，独立运行且不依赖庞大的构建脚本或文档。
 
 部署包获取包含完整的运行配置：包含可执行脚本、API 服务（`api_server.py`）及前端 Web 测试程序（`web_test/server.py`）。
 
 部署及测试使用流程：
 
 ```bash
-# 1) 获得完整 deploy 目录或从 Releases 下载压缩包
+# 1) 获得完整部署代码或从 Releases 下载压缩包
 # 2) 安装依赖
-pip install onnxruntime fastapi uvicorn pydantic numpy
+pip install -r requirements-deploy-cpu.txt
 
 # 3) 启动后端过滤 API 引擎
 bash run_api.sh --port 8000
@@ -180,7 +180,7 @@ python server.py  # 启动后在浏览器打开 http://127.0.0.1:8090
 GPU 主机如需启动加速 API：
 
 ```bash
-pip install onnxruntime-gpu fastapi uvicorn pydantic numpy
+pip install -r requirements-deploy-gpu.txt
 bash run_api.sh --port 8000 --onnx_gpu
 ```
 
@@ -237,9 +237,9 @@ python scripts/threshold_search.py \
 - 本地输出日志和缓存
 
 部署包发布与运行方式：
-- 采用 `deploy/` 目录原始文件触发自动发布，整个 `deploy` 内包含所有服务脚本与前端 UI。
-- 当 `deploy/checkpoints` 中的模型及 `vocab.json` 被更新后即可推送代码。
-- 发布时该目录将被自动生成打包文件供线上机器使用。
+- 监听根目录及 `checkpoints/` 等核心资产文件触发自动发布打包。
+- 当 `checkpoints/` 目录中的模型和 `vocab.json` 或者 `api_server.py` 等对应脚本被更新后即可推送代码。
+- 发布时工作流将自动抽取必要文件，生成归档打包文件供线上机器使用。
 
 测试通讯 API 可使用：
 
