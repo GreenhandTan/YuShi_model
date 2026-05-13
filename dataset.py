@@ -45,15 +45,6 @@ RISK_LEVEL_TO_ID = {
 }
 ID_TO_RISK_LEVEL = {v: k for k, v in RISK_LEVEL_TO_ID.items()}
 
-RISK_LEVEL_TO_ID = {
-    "safe": 0,
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "critical": 4,
-}
-ID_TO_RISK_LEVEL = {v: k for k, v in RISK_LEVEL_TO_ID.items()}
-
 
 def validate_label_consistency(
     is_violation: int,
@@ -308,7 +299,8 @@ class SimpleTokenizer:
         return 0
 
     def encode(self, text: str) -> List[int]:
-        return [self.token2id.get(c, 1) for c in text]
+        unk_id = self.token2id.get(self.UNK_TOKEN, 1)
+        return [self.token2id.get(c, unk_id) for c in text]
 
     def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
         special = {self.PAD_TOKEN, self.UNK_TOKEN, self.EOS_TOKEN, self.BOS_TOKEN}

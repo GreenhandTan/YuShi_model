@@ -40,7 +40,6 @@
 - PyTorch 2.1+ (深度学习框架)
 - Hugging Face Datasets (数据集管理)
 - FastAPI (HTTP 服务框架)
-- Docker (容器化部署)
 
 ## 核心功能
 
@@ -200,7 +199,6 @@ python export_onnx.py \
 - 轻量级模型设计 (~50 MB)
 - 多任务学习 (违规检测 + 风险分类 + 类型分类)
 - 生产级阈值优化工具
-- Docker + Kubernetes 支持
 - CLI + HTTP API 双接口
 - CPU/GPU 自适应
 

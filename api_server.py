@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+﻿from contextlib import asynccontextmanager
+from pathlib import Path
 import os
 from typing import List, Optional
 
@@ -26,24 +27,12 @@ DEFAULT_ONNX_USE_GPU = os.getenv("ONNX_USE_GPU", "0") == "1"
 DEFAULT_MAX_LENGTH = int(os.getenv("INFER_MAX_LENGTH", "256"))
 DEFAULT_BATCH_SIZE = int(os.getenv("INFER_BATCH_SIZE", "16"))
 
-app = FastAPI(title="YuShi Content Audit Service", version="1.1.0")
 _engine: Optional[AuditONNXInferencer] = None
 
 
-class AuditRequest(BaseModel):
-    text: str = Field(..., min_length=1, description="Single input text")
-
-
-class AuditBatchRequest(BaseModel):
-    texts: List[str] = Field(..., min_items=1, description="Batch input texts")
-
-
-@app.on_event("startup")
-def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global _engine
-    if _engine is not None:
-        return
-
     _engine = AuditONNXInferencer(
         model_path=DEFAULT_ONNX_MODEL,
         vocab_path=DEFAULT_VOCAB,
@@ -53,6 +42,19 @@ def startup_event() -> None:
         enforce_safe_consistency=True,
         violation_conf_threshold=DEFAULT_THRESHOLD,
     )
+    yield
+    _engine = None
+
+
+app = FastAPI(title="YuShi Content Audit Service", version="1.1.0", lifespan=lifespan)
+
+
+class AuditRequest(BaseModel):
+    text: str = Field(..., min_length=1, description="Single input text")
+
+
+class AuditBatchRequest(BaseModel):
+    texts: List[str] = Field(..., min_items=1, description="Batch input texts")
 
 
 @app.get("/health")
