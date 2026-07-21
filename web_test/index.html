@@ -1,192 +1,662 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>御史模型 - web_test 本地审核测试</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>御史模型 - 内容审核测试</title>
     <style>
         :root {
-            --bg: #f4f7fb;
-            --card: #ffffff;
-            --ink: #1f2937;
-            --sub: #6b7280;
-            --brand: #0f766e;
-            --brand-2: #0ea5a4;
+            --bg: #f8f9fb;
+            --surface: #ffffff;
+            --ink: #111827;
+            --ink-secondary: #6b7280;
+            --ink-tertiary: #9ca3af;
+            --accent: #0d9488;
+            --accent-light: #ccfbf1;
+            --accent-dark: #0f766e;
             --danger: #dc2626;
-            --ok: #16a34a;
-            --border: #dbe5ef;
+            --danger-light: #fef2f2;
+            --danger-bg: #fee2e2;
+            --safe: #16a34a;
+            --safe-light: #f0fdf4;
+            --safe-bg: #dcfce7;
+            --warning: #d97706;
+            --warning-light: #fffbeb;
+            --border: #e5e7eb;
+            --border-light: #f3f4f6;
+            --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+            --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+            --radius-sm: 8px;
+            --radius-md: 12px;
+            --radius-lg: 16px;
+            --radius-full: 9999px;
         }
 
-        * {
+        *,
+        *::before,
+        *::after {
             box-sizing: border-box;
+            margin: 0;
         }
 
         body {
-            margin: 0;
-            font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-            background: radial-gradient(1200px 700px at 0% -10%, #d8f4ef 0%, var(--bg) 60%);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+                "Microsoft YaHei", "Helvetica Neue", sans-serif;
+            background: var(--bg);
+            color: var(--ink);
+            line-height: 1.6;
+            min-height: 100vh;
+            min-height: 100dvh;
+        }
+
+        /* ===== Layout ===== */
+        .app {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            height: 100dvh;
+            max-width: 900px;
+            margin: 0 auto;
+            background: var(--surface);
+        }
+
+        /* ===== Header ===== */
+        .header {
+            flex-shrink: 0;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .header-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo-icon {
+            width: 36px;
+            height: 36px;
+            background: linear-gradient(135deg, var(--accent), var(--accent-dark));
+            border-radius: var(--radius-sm);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 18px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .logo-text h1 {
+            font-size: 16px;
+            font-weight: 700;
+            line-height: 1.2;
             color: var(--ink);
         }
 
-        .wrap {
-            max-width: 960px;
-            margin: 24px auto;
-            padding: 0 16px;
-        }
-
-        .header {
-            background: linear-gradient(120deg, var(--brand), var(--brand-2));
-            color: #fff;
-            border-radius: 14px;
-            padding: 16px 20px;
-            box-shadow: 0 12px 30px rgba(15, 118, 110, 0.2);
-        }
-
-        .header h1 {
-            margin: 0;
-            font-size: 22px;
-        }
-
-        .header p {
-            margin: 6px 0 0;
-            opacity: 0.95;
-            font-size: 14px;
-        }
-
-        .panel {
-            margin-top: 16px;
-            background: var(--card);
-            border: 1px solid var(--border);
-            border-radius: 14px;
-            overflow: hidden;
-        }
-
-        .chat {
-            height: 520px;
-            overflow-y: auto;
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            background: linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%);
-        }
-
-        .msg {
-            max-width: 80%;
-            padding: 10px 12px;
-            border-radius: 10px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-word;
-            border: 1px solid transparent;
-        }
-
-        .user {
-            align-self: flex-end;
-            background: #e6fffb;
-            border-color: #99f6e4;
-        }
-
-        .bot {
-            align-self: flex-start;
-            background: #fff;
-            border-color: #e5e7eb;
-        }
-
-        .meta {
+        .logo-text span {
             font-size: 12px;
-            color: var(--sub);
-            margin-top: 6px;
+            color: var(--ink-tertiary);
         }
 
-        .danger {
-            color: var(--danger);
-        }
-
-        .ok {
-            color: var(--ok);
-        }
-
-        .input-bar {
-            border-top: 1px solid var(--border);
-            padding: 12px;
-            display: grid;
-            grid-template-columns: 1fr auto;
-            gap: 10px;
-            background: #fff;
-        }
-
-        textarea {
-            width: 100%;
-            resize: vertical;
-            min-height: 52px;
-            max-height: 180px;
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 10px;
-            font: inherit;
-            outline: none;
-        }
-
-        textarea:focus {
-            border-color: var(--brand-2);
-        }
-
-        button {
-            border: 0;
-            border-radius: 10px;
-            background: var(--brand);
-            color: #fff;
-            padding: 0 18px;
-            font-weight: 600;
-            cursor: pointer;
-        }
-
-        button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .toolbar {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-top: 8px;
-            color: var(--sub);
-            font-size: 13px;
-        }
-
-        .pill {
+        .status-badge {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            border: 1px solid var(--border);
-            border-radius: 999px;
             padding: 4px 10px;
-            background: #fff;
+            border-radius: var(--radius-full);
+            font-size: 12px;
+            font-weight: 500;
+            background: var(--safe-light);
+            color: var(--safe);
+            border: 1px solid var(--safe-bg);
+            flex-shrink: 0;
+        }
+
+        .status-badge.error {
+            background: var(--danger-light);
+            color: var(--danger);
+            border-color: var(--danger-bg);
+        }
+
+        .status-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        /* ===== Stats Bar ===== */
+        .stats-bar {
+            display: flex;
+            gap: 16px;
+            padding: 10px 20px;
+            border-bottom: 1px solid var(--border-light);
+            background: var(--bg);
+            overflow-x: auto;
+        }
+
+        .stat-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+            color: var(--ink-secondary);
+            white-space: nowrap;
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: var(--ink);
+        }
+
+        /* ===== Chat Area ===== */
+        .chat-area {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            scroll-behavior: smooth;
+        }
+
+        /* ===== Messages ===== */
+        .msg {
+            display: flex;
+            flex-direction: column;
+            max-width: 85%;
+            animation: msgIn 0.2s ease-out;
+        }
+
+        @keyframes msgIn {
+            from {
+                opacity: 0;
+                transform: translateY(8px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .msg-user {
+            align-self: flex-end;
+        }
+
+        .msg-bot {
+            align-self: flex-start;
+        }
+
+        .msg-bubble {
+            padding: 12px 16px;
+            border-radius: var(--radius-md);
+            line-height: 1.6;
+            word-break: break-word;
+        }
+
+        .msg-user .msg-bubble {
+            background: var(--accent);
+            color: white;
+            border-bottom-right-radius: 4px;
+        }
+
+        .msg-bot .msg-bubble {
+            background: var(--bg);
+            color: var(--ink);
+            border-bottom-left-radius: 4px;
+        }
+
+        .msg-time {
+            font-size: 11px;
+            color: var(--ink-tertiary);
+            margin-top: 4px;
+            padding: 0 4px;
+        }
+
+        .msg-user .msg-time {
+            text-align: right;
+        }
+
+        /* ===== Audit Result Card ===== */
+        .audit-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .audit-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        .audit-verdict {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .audit-verdict.safe {
+            color: var(--safe);
+        }
+
+        .audit-verdict.violation {
+            color: var(--danger);
+        }
+
+        .audit-verdict-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .audit-verdict.safe .audit-verdict-icon {
+            background: var(--safe-bg);
+        }
+
+        .audit-verdict.violation .audit-verdict-icon {
+            background: var(--danger-bg);
+        }
+
+        .audit-layer {
+            font-size: 11px;
+            color: var(--ink-tertiary);
+            padding: 2px 8px;
+            background: var(--bg);
+            border-radius: var(--radius-full);
+        }
+
+        .audit-card-body {
+            padding: 12px 16px;
+        }
+
+        .audit-reason {
+            font-size: 14px;
+            color: var(--ink-secondary);
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        .audit-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 8px;
+        }
+
+        .audit-detail {
+            padding: 8px 10px;
+            background: var(--bg);
+            border-radius: var(--radius-sm);
+        }
+
+        .audit-detail-label {
+            font-size: 11px;
+            color: var(--ink-tertiary);
+            margin-bottom: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .audit-detail-value {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--ink);
+        }
+
+        /* ===== Welcome Message ===== */
+        .welcome {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--ink-secondary);
+        }
+
+        .welcome-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .welcome h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--ink);
+            margin-bottom: 8px;
+        }
+
+        .welcome p {
+            font-size: 14px;
+            max-width: 360px;
+            margin: 0 auto;
+        }
+
+        .example-chips {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 20px;
+        }
+
+        .example-chip {
+            padding: 8px 14px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-full);
+            font-size: 13px;
+            color: var(--ink-secondary);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .example-chip:hover {
+            background: var(--accent-light);
+            border-color: var(--accent);
+            color: var(--accent-dark);
+        }
+
+        /* ===== Input Area ===== */
+        .input-area {
+            flex-shrink: 0;
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            background: var(--surface);
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+
+        .input-field {
+            flex: 1;
+            position: relative;
+        }
+
+        .input-field textarea {
+            width: 100%;
+            min-height: 44px;
+            max-height: 120px;
+            padding: 10px 14px;
+            border: 1.5px solid var(--border);
+            border-radius: var(--radius-md);
+            font: inherit;
+            font-size: 14px;
+            line-height: 1.5;
+            resize: none;
+            outline: none;
+            transition: border-color 0.15s;
+            background: var(--bg);
+        }
+
+        .input-field textarea:focus {
+            border-color: var(--accent);
+            background: var(--surface);
+        }
+
+        .input-field textarea::placeholder {
+            color: var(--ink-tertiary);
+        }
+
+        .send-btn {
+            flex-shrink: 0;
+            width: 44px;
+            height: 44px;
+            border: none;
+            border-radius: var(--radius-md);
+            background: var(--accent);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .send-btn:hover:not(:disabled) {
+            background: var(--accent-dark);
+        }
+
+        .send-btn:active:not(:disabled) {
+            transform: scale(0.95);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .send-btn svg {
+            width: 20px;
+            height: 20px;
+        }
+
+        .input-hint {
+            font-size: 11px;
+            color: var(--ink-tertiary);
+            margin-top: 6px;
+            text-align: center;
+        }
+
+        /* ===== Loading ===== */
+        .loading-dots {
+            display: inline-flex;
+            gap: 4px;
+            padding: 4px 0;
+        }
+
+        .loading-dots span {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--ink-tertiary);
+            animation: dotPulse 1.2s infinite;
+        }
+
+        .loading-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .loading-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes dotPulse {
+            0%, 60%, 100% {
+                opacity: 0.3;
+                transform: scale(0.8);
+            }
+            30% {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        /* ===== Responsive ===== */
+        @media (min-width: 640px) {
+            .app {
+                margin: 20px auto;
+                height: calc(100vh - 40px);
+                height: calc(100dvh - 40px);
+                border-radius: var(--radius-lg);
+                border: 1px solid var(--border);
+                box-shadow: var(--shadow-lg);
+                overflow: hidden;
+            }
+
+            .msg {
+                max-width: 70%;
+            }
+
+            .audit-details {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 639px) {
+            .header-top {
+                flex-wrap: wrap;
+            }
+
+            .stats-bar {
+                gap: 12px;
+            }
+
+            .chat-area {
+                padding: 16px;
+            }
+
+            .msg {
+                max-width: 90%;
+            }
+
+            .input-area {
+                padding: 12px 16px;
+            }
+
+            .example-chips {
+                gap: 6px;
+            }
+
+            .example-chip {
+                font-size: 12px;
+                padding: 6px 12px;
+            }
+        }
+
+        /* ===== Scrollbar ===== */
+        .chat-area::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-area::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-area::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        .chat-area::-webkit-scrollbar-thumb:hover {
+            background: var(--ink-tertiary);
+        }
+
+        /* ===== Reduced Motion ===== */
+        @media (prefers-reduced-motion: reduce) {
+            .msg {
+                animation: none;
+            }
+
+            .loading-dots span {
+                animation: none;
+                opacity: 0.5;
+            }
+
+            .loading-dots span:nth-child(2) {
+                opacity: 0.7;
+            }
+
+            .loading-dots span:nth-child(3) {
+                opacity: 0.9;
+            }
         }
     </style>
 </head>
 
 <body>
-    <div class="wrap">
-        <div class="header">
-            <h1>御史模型 web_test 本地聊天审核测试</h1>
-            <p>连接本地服务: http://127.0.0.1:8000/audit (通过本地代理转发)</p>
-        </div>
-
-        <div class="toolbar">
-            <span class="pill">测试入口: http://127.0.0.1:8090</span>
-            <span id="status" class="pill">状态: 就绪</span>
-        </div>
-
-        <div class="panel">
-            <div id="chat" class="chat"></div>
-            <div class="input-bar">
-                <textarea id="input" placeholder="输入待审核文本，Enter发送，Shift+Enter换行"></textarea>
-                <button id="sendBtn">发送审核</button>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-top">
+                <div class="logo">
+                    <div class="logo-icon">御</div>
+                    <div class="logo-text">
+                        <h1>御史模型</h1>
+                        <span>内容审核测试</span>
+                    </div>
+                </div>
+                <div id="status" class="status-badge">
+                    <span class="status-dot"></span>
+                    <span>就绪</span>
+                </div>
             </div>
+        </header>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-item">
+                <span>总计</span>
+                <span class="stat-value" id="statTotal">0</span>
+            </div>
+            <div class="stat-item">
+                <span>合规</span>
+                <span class="stat-value" id="statSafe" style="color: var(--safe);">0</span>
+            </div>
+            <div class="stat-item">
+                <span>违规</span>
+                <span class="stat-value" id="statViolation" style="color: var(--danger);">0</span>
+            </div>
+            <div class="stat-item">
+                <span>规则命中</span>
+                <span class="stat-value" id="statRule">0</span>
+            </div>
+            <div class="stat-item">
+                <span>模型推理</span>
+                <span class="stat-value" id="statModel">0</span>
+            </div>
+        </div>
+
+        <!-- Chat Area -->
+        <div id="chat" class="chat-area">
+            <div class="welcome">
+                <div class="welcome-icon">&#9878;</div>
+                <h2>内容审核测试</h2>
+                <p>输入文本进行实时内容审核，支持规则引擎 + AI 模型两级审核</p>
+                <div class="example-chips">
+                    <span class="example-chip" onclick="useExample(this)">今天天气真好</span>
+                    <span class="example-chip" onclick="useExample(this)">代发兼职日结，私聊我</span>
+                    <span class="example-chip" onclick="useExample(this)">约炮加我微信</span>
+                    <span class="example-chip" onclick="useExample(this)">坚决维护国家统一</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-area">
+            <div class="input-wrapper">
+                <div class="input-field">
+                    <textarea id="input" placeholder="输入待审核文本..." rows="1"></textarea>
+                </div>
+                <button id="sendBtn" class="send-btn" title="发送">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                        stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+            <div class="input-hint">Enter 发送 &middot; Shift + Enter 换行</div>
         </div>
     </div>
 
@@ -196,33 +666,146 @@
         const sendBtn = document.getElementById('sendBtn');
         const statusEl = document.getElementById('status');
 
-        function addMessage(text, role, extraHtml = '') {
-            const node = document.createElement('div');
-            node.className = `msg ${role}`;
-            node.innerHTML = `${escapeHtml(text)}${extraHtml ? `<div class="meta">${extraHtml}</div>` : ''}`;
-            chat.appendChild(node);
-            chat.scrollTop = chat.scrollHeight;
+        const stats = { total: 0, safe: 0, violation: 0, rule: 0, model: 0 };
+
+        function updateStats() {
+            document.getElementById('statTotal').textContent = stats.total;
+            document.getElementById('statSafe').textContent = stats.safe;
+            document.getElementById('statViolation').textContent = stats.violation;
+            document.getElementById('statRule').textContent = stats.rule;
+            document.getElementById('statModel').textContent = stats.model;
+        }
+
+        function setStatus(text, isError = false) {
+            statusEl.className = isError ? 'status-badge error' : 'status-badge';
+            statusEl.innerHTML = `<span class="status-dot"></span><span>${escapeHtml(text)}</span>`;
         }
 
         function escapeHtml(str) {
-            return str
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;');
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
         }
 
-        function setBusy(busy, text) {
-            sendBtn.disabled = busy;
-            statusEl.textContent = `状态: ${text}`;
+        function getTime() {
+            return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function removeWelcome() {
+            const welcome = chat.querySelector('.welcome');
+            if (welcome) welcome.remove();
+        }
+
+        function addMessage(content, role) {
+            removeWelcome();
+            const msg = document.createElement('div');
+            msg.className = `msg msg-${role}`;
+            msg.innerHTML = `
+                <div class="msg-bubble">${content}</div>
+                <div class="msg-time">${getTime()}</div>
+            `;
+            chat.appendChild(msg);
+            chat.scrollTop = chat.scrollHeight;
+            return msg;
+        }
+
+        function addLoading() {
+            removeWelcome();
+            const msg = document.createElement('div');
+            msg.className = 'msg msg-bot';
+            msg.id = 'loading-msg';
+            msg.innerHTML = `
+                <div class="msg-bubble">
+                    <div class="loading-dots"><span></span><span></span><span></span></div>
+                </div>
+            `;
+            chat.appendChild(msg);
+            chat.scrollTop = chat.scrollHeight;
+        }
+
+        function removeLoading() {
+            const el = document.getElementById('loading-msg');
+            if (el) el.remove();
+        }
+
+        function addAuditResult(data) {
+            removeWelcome();
+            const isViolation = data.is_violation;
+            const verdictClass = isViolation ? 'violation' : 'safe';
+            const verdictText = isViolation ? '违规' : '合规';
+            const verdictIcon = isViolation ? '&#10007;' : '&#10003;';
+            const layer = data.layer === 'rule' ? '规则引擎' : 'AI 模型';
+
+            const details = [
+                { label: '风险等级', value: data.risk_level || '-' },
+                { label: '违规类型', value: data.violation_type || '-' },
+                { label: '置信度', value: (data.confidence || 0).toFixed(2) },
+            ];
+
+            const detailsHtml = details.map(d => `
+                <div class="audit-detail">
+                    <div class="audit-detail-label">${d.label}</div>
+                    <div class="audit-detail-value">${escapeHtml(d.value)}</div>
+                </div>
+            `).join('');
+
+            const msg = document.createElement('div');
+            msg.className = 'msg msg-bot';
+            msg.innerHTML = `
+                <div class="audit-card">
+                    <div class="audit-card-header">
+                        <div class="audit-verdict ${verdictClass}">
+                            <span class="audit-verdict-icon">${verdictIcon}</span>
+                            <span>${verdictText}</span>
+                        </div>
+                        <span class="audit-layer">${layer}</span>
+                    </div>
+                    <div class="audit-card-body">
+                        <div class="audit-reason">${escapeHtml(data.reason || '已完成审核')}</div>
+                        <div class="audit-details">${detailsHtml}</div>
+                    </div>
+                </div>
+                <div class="msg-time">${getTime()}</div>
+            `;
+            chat.appendChild(msg);
+            chat.scrollTop = chat.scrollHeight;
+
+            // Update stats
+            stats.total++;
+            if (isViolation) {
+                stats.violation++;
+            } else {
+                stats.safe++;
+            }
+            if (data.layer === 'rule') {
+                stats.rule++;
+            } else {
+                stats.model++;
+            }
+            updateStats();
+        }
+
+        function useExample(chip) {
+            input.value = chip.textContent;
+            input.focus();
+            autoResize();
+        }
+
+        function autoResize() {
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 120) + 'px';
         }
 
         async function sendAudit() {
             const text = input.value.trim();
             if (!text) return;
 
-            addMessage(text, 'user');
+            addMessage(escapeHtml(text), 'user');
             input.value = '';
-            setBusy(true, '审核中...');
+            autoResize();
+            addLoading();
+            sendBtn.disabled = true;
+            setStatus('审核中...');
 
             try {
                 const resp = await fetch('/api/audit', {
@@ -231,33 +814,32 @@
                     body: JSON.stringify({ text })
                 });
 
+                removeLoading();
+
                 if (!resp.ok) {
                     const err = await resp.text();
-                    addMessage('请求失败', 'bot', `<span class="danger">HTTP ${resp.status}</span> ${escapeHtml(err)}`);
+                    addMessage(`<span style="color:var(--danger)">请求失败 (${resp.status})</span><br><small>${escapeHtml(err)}</small>`, 'bot');
+                    setStatus('请求失败', true);
                 } else {
                     const data = await resp.json();
-                    const v = data.is_violation ? '<span class="danger">违规</span>' : '<span class="ok">合规</span>';
-                    const meta = [
-                        `判定: ${v}`,
-                        `风险: ${escapeHtml(String(data.risk_level || '-'))}`,
-                        `类型: ${escapeHtml(String(data.violation_type || '-'))}`,
-                        `置信度: ${Number(data.confidence || 0).toFixed(4)}`
-                    ].join(' | ');
-
-                    addMessage(
-                        data.reason || '已完成审核。',
-                        'bot',
-                        meta
-                    );
+                    addAuditResult(data);
+                    setStatus('就绪');
                 }
             } catch (e) {
-                addMessage('无法连接测试服务，请确认 local_test/server.py 已启动。', 'bot', `<span class="danger">${escapeHtml(String(e))}</span>`);
+                removeLoading();
+                addMessage(
+                    `<span style="color:var(--danger)">连接失败</span><br><small>请确认审核服务已启动 (api_server.py)</small>`,
+                    'bot'
+                );
+                setStatus('连接失败', true);
             } finally {
-                setBusy(false, '就绪');
+                sendBtn.disabled = false;
             }
         }
 
+        // Event listeners
         sendBtn.addEventListener('click', sendAudit);
+
         input.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -265,7 +847,10 @@
             }
         });
 
-        addMessage('欢迎使用御史模型 web_test 测试页。请输入文本并发送进行内容审核。', 'bot');
+        input.addEventListener('input', autoResize);
+
+        // Auto-focus input
+        input.focus();
     </script>
 </body>
 

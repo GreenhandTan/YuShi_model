@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
+"""
+YuShi Content Audit - Web Test Server
+轻量级 Web 测试服务器，代理请求到审核 API
+
+启动方式:
+  python server.py
+  python server.py --port 8090 --api http://127.0.0.1:8000/audit
+"""
+
 import json
 import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -11,45 +21,36 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 HOST = "0.0.0.0"
-PORT = 8090
-AUDIT_API = "http://127.0.0.1:8000/audit"
+DEFAULT_PORT = 8090
+DEFAULT_API = "http://127.0.0.1:8000/audit"
 
 
 class ReusableHTTPServer(HTTPServer):
     allow_reuse_address = True
 
 
-def _run_command(command: list[str]) -> str:
+def _run_command(command: list) -> str:
     try:
         completed = subprocess.run(
-            command,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
+            command, check=False,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
         )
         return completed.stdout.strip()
     except FileNotFoundError:
         return ""
 
 
-def _kill_pids(pids: list[int]) -> None:
+def _kill_pids(pids: list) -> None:
     for pid in pids:
         try:
             os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
+        except (ProcessLookupError, PermissionError):
             continue
-        except PermissionError:
-            continue
-
     time.sleep(0.5)
-
     for pid in pids:
         try:
             os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            continue
-        except PermissionError:
+        except (ProcessLookupError, PermissionError):
             continue
 
 
@@ -70,15 +71,19 @@ def cleanup_port(port: int) -> None:
         subprocess.run([fuser, "-k", f"{port}/tcp"], check=False)
         return
 
-    print(f"[web_test] 未找到 lsof/fuser，跳过端口清理: {port}")
-
 
 class Handler(BaseHTTPRequestHandler):
+    audit_api = DEFAULT_API
+
+    def log_message(self, format, *args):
+        pass  # Suppress default logging
+
     def _send_json(self, status: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
 
@@ -93,11 +98,18 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             html_path = Path(__file__).with_name("index.html")
-            self._send_html(html_path.read_text(encoding="utf-8"))
+            if html_path.exists():
+                self._send_html(html_path.read_text(encoding="utf-8"))
+            else:
+                self._send_json(500, {"error": "index.html not found"})
             return
 
         if self.path == "/health":
-            self._send_json(200, {"ok": True, "proxy": True, "target": AUDIT_API})
+            self._send_json(200, {
+                "ok": True,
+                "proxy": True,
+                "target": self.audit_api,
+            })
             return
 
         self._send_json(404, {"error": "not found"})
@@ -123,14 +135,14 @@ class Handler(BaseHTTPRequestHandler):
 
         req_data = json.dumps({"text": text}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(
-            AUDIT_API,
+            self.audit_api,
             data=req_data,
             method="POST",
             headers={"Content-Type": "application/json"},
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 body = resp.read()
                 code = resp.getcode()
                 self.send_response(code)
@@ -144,12 +156,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self._send_json(502, {"error": "upstream unavailable", "detail": str(e)})
 
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+
 
 def main():
-    cleanup_port(PORT)
-    print(f"[web_test] open: http://{HOST}:{PORT}")
-    print(f"[web_test] proxy to: {AUDIT_API}")
-    ReusableHTTPServer((HOST, PORT), Handler).serve_forever()
+    import argparse
+    parser = argparse.ArgumentParser(description="YuShi Web Test Server")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--api", type=str, default=DEFAULT_API, help="审核 API 地址")
+    args = parser.parse_args()
+
+    Handler.audit_api = args.api
+    cleanup_port(args.port)
+
+    print(f"[web_test] 启动: http://{HOST}:{args.port}")
+    print(f"[web_test] 代理: {args.api}")
+    print(f"[web_test] 按 Ctrl+C 停止")
+
+    try:
+        ReusableHTTPServer((HOST, args.port), Handler).serve_forever()
+    except KeyboardInterrupt:
+        print("\n[web_test] 已停止")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
