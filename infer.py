@@ -1,12 +1,17 @@
 """
-推理脚本
-使用训练好的内容审核专家模型进行文本审核，输出标准 JSON 格式
+推理脚本 — 多层级内容审核
 
-支持:
-- 单条 / 批量文本审核
-- 文件输入 (JSONL)，文件输出 (JSON)
-- 交互模式（逐条输入）
-- 所有输出均为标准 JSON 格式
+架构:
+  第一层: 规则引擎 (CPU, <1ms) — 高置信度关键词/正则匹配
+  第二层: Encoder 模型 (CPU, <30ms) — 预训练模型分类
+  第三层: 兜底策略 — 置信度阈值 + 一致性后处理
+
+使用方式:
+  python infer.py --checkpoint ./checkpoints/best.pt --prompt "测试文本"
+  python infer.py --checkpoint ./checkpoints/best.pt --prompts "文本1" "文本2"
+  python infer.py --checkpoint ./checkpoints/best.pt --input_file input.jsonl
+  python infer.py --checkpoint ./checkpoints/best.pt --interactive
+  python infer.py --checkpoint ./checkpoints/best.pt --rules_dir ./rules --prompt "测试"
 """
 
 import os
@@ -15,12 +20,13 @@ import json
 import argparse
 import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Optional
+from typing import List, Dict, Any, Optional
 
 import torch
+from transformers import AutoTokenizer
 
 from model import ContentAuditExpert
-from dataset import SimpleTokenizer
+from rule_engine import RuleEngine
 
 
 # ============================================================
@@ -30,81 +36,78 @@ from dataset import SimpleTokenizer
 
 class AuditInferencer:
     """
-    内容审核推理器
+    多层级内容审核推理器
     
-    核心职责:
-    - 加载模型 & 词汇表
-    - 执行审核推理
-    - 输出标准 JSON 格式的审核结果
+    两级架构:
+    1. 规则引擎: <1ms, 处理高置信度场景
+    2. Encoder 模型: <30ms, 处理灰色地带
     """
 
     def __init__(
         self,
         checkpoint_path: str,
-        vocab_path: str,
         device: str = "auto",
-        use_bf16: bool = False,
         max_length: int = 256,
-        batch_size: int = 4,
+        batch_size: int = 8,
         enforce_safe_consistency: bool = True,
         violation_conf_threshold: float = 0.30,
         multi_thresholds: Optional[Dict[str, float]] = None,
+        rules_dir: Optional[str] = None,
+        skip_rules: bool = False,
     ):
-        """
-        Args:
-            checkpoint_path: 模型 .pt 检查点路径
-            vocab_path: 词汇表 JSON 路径
-            device: "auto" / "cpu" / "cuda" / "cuda:N"
-            use_bf16: 是否 BF16 推理
-            multi_thresholds: 多阈值策略 {"safe": 0.2, "low": 0.3, "medium": 0.4, "high": 0.5, "critical": 0.7}
-        """
         self.device = self._resolve_device(device)
-        self.use_bf16 = use_bf16 and (self.device.type == "cuda")
         self.max_length = max_length
         self.batch_size = batch_size
         self.enforce_safe_consistency = enforce_safe_consistency
         self.violation_conf_threshold = max(0.0, min(1.0, violation_conf_threshold))
+        self.skip_rules = skip_rules
 
-        # 多阈值策略 (默认为基础阈值)
         self.multi_thresholds = multi_thresholds or {
-            "safe": 0.20,      # 合规内容的阈值低
-            "low": 0.30,
-            "medium": 0.40,
-            "high": 0.50,
-            "critical": 0.70,  # 高危内容要求更高置信度
+            "safe": 0.20, "low": 0.30, "medium": 0.40,
+            "high": 0.50, "critical": 0.70,
         }
 
-        # 加载 tokenizer
-        print(f"加载词汇表: {vocab_path}")
-        self.tokenizer = SimpleTokenizer.load(vocab_path)
+        # ---- 加载规则引擎 ----
+        if not skip_rules:
+            self.rule_engine = RuleEngine(rules_dir=rules_dir)
+            stats = self.rule_engine.stats()
+            print(f"[规则引擎] 已加载: {stats}")
+        else:
+            self.rule_engine = None
 
-        # 加载模型
+        # ---- 加载模型 ----
         print(f"加载模型: {checkpoint_path}")
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-        
+
+        backbone_name = ckpt.get("backbone_name", "hfl/chinese-roberta-wwm-ext")
         model_args = ckpt.get("args", {})
+
+        # 加载 tokenizer
+        tokenizer_dir = Path(checkpoint_path).parent / "tokenizer"
+        if tokenizer_dir.exists():
+            print(f"加载 tokenizer: {tokenizer_dir}")
+            self.tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
+        else:
+            print(f"加载 tokenizer: {backbone_name}")
+            self.tokenizer = AutoTokenizer.from_pretrained(backbone_name)
+
+        # 加载模型
         self.model = ContentAuditExpert(
-            vocab_size=self.tokenizer.vocab_size,
-            dim=model_args.get("dim", 256),
-            n_layers=model_args.get("n_layers", 6),
-            n_heads=model_args.get("n_heads", 4),
-            ffn_multiplier=model_args.get("ffn_multiplier", 4),
-            max_seq_len=model_args.get("max_seq_len", 1024),
-            pad_token_id=self.tokenizer.pad_token_id,
+            backbone_name=backbone_name,
+            dropout=model_args.get("dropout", 0.1),
+            pool_last_weight=model_args.get("pool_last_weight", 0.6),
+            freeze_backbone_layers=0,  # 推理时不冻结任何层
         )
 
         sd = ckpt["model_state_dict"]
         new_sd = {k.replace("module.", ""): v for k, v in sd.items()}
         self.model.load_state_dict(new_sd)
         self.model.to(self.device)
-
-        if self.use_bf16:
-            self.model = self.model.bfloat16()
         self.model.eval()
 
         step = ckpt.get("global_step", "?")
         score = ckpt.get("best_val_score", None)
-        print(f"[OK] 模型就绪! step={step}" + 
+        print(f"[OK] 模型就绪! step={step}" +
               (f", best_score={score:.4f}" if score else ""))
 
     @staticmethod
@@ -114,17 +117,15 @@ class AuditInferencer:
         return torch.device(device)
 
     def _postprocess_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """对推理结果做阈值与一致性后处理。支持基于风险等级的多阈值策略。"""
+        """阈值与一致性后处理"""
         out = dict(result)
 
         conf = float(out.get("confidence", 0.0))
         pred_violation = bool(out.get("is_violation", False))
         risk_level = str(out.get("risk_level", "safe")).lower()
 
-        # 获取当前风险等级的阈值 (多阈值策略)
         threshold = self.multi_thresholds.get(risk_level, self.violation_conf_threshold)
 
-        # 当预测为违规但置信度低于阈值时，回退为合规
         if pred_violation and conf < threshold:
             out["is_violation"] = False
             out["reason"] = (
@@ -132,106 +133,108 @@ class AuditInferencer:
                 "按多阈值策略回退为合规。"
             )
 
-        # 一致性规则: 合规时强制 risk/type 为 safe
         if self.enforce_safe_consistency and not bool(out.get("is_violation", False)):
             out["risk_level"] = "safe"
             out["violation_type"] = "safe"
 
         return out
 
-    # ---- 单条审核 ----
-
-    @torch.inference_mode()
     def audit(self, text: str) -> Dict[str, Any]:
         """
-        审核单条文本，返回 JSON 兼容的审核结果字典
+        审核单条文本 — 两级架构
 
         Returns:
-            {
-                "is_violation": bool,
-                "risk_level": str,
-                "violation_type": str,
-                "confidence": float,
-                "reason": str,
-            }
+            审核结果 dict (与 V1 格式一致，额外包含 layer 字段)
         """
-        result = self.model.audit(
-            text,
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-        )
-        return self._postprocess_result(result)
+        # ---- 第一层: 规则引擎 ----
+        if self.rule_engine and not self.skip_rules:
+            rule_result = self.rule_engine.check(text)
+            if rule_result is not None:
+                # 规则引擎已判定
+                result = self._postprocess_result(rule_result)
+                result["layer"] = "rule"
+                return result
+
+        # ---- 第二层: 模型推理 ----
+        with torch.inference_mode():
+            model_result = self.model.audit(
+                text, tokenizer=self.tokenizer, max_length=self.max_length,
+            )
+
+        result = self._postprocess_result(model_result)
+        result["layer"] = "model"
+        return result
 
     def audit_json(self, text: str) -> str:
-        """审核单条文本，返回 JSON 字符串"""
         result = self.audit(text)
         return json.dumps(result, ensure_ascii=False, indent=2)
 
-    # ---- 批量审核 ----
-
-    @torch.inference_mode()
     def audit_batch(self, texts: List[str]) -> Dict[str, Any]:
         """
-        批量审核多条文本
-        
-        Returns:
-            {
-                "results": [result_dict, ...],
-                "summary": {
-                    "total": int,
-                    "violation_count": int,
-                    "safe_count": int,
-                    "latency_seconds": float,
-                }
-            }
+        批量审核 — 两级架构
+
+        规则引擎命中的文本直接出结果，未命中的批量送模型推理
         """
         start = time.time()
-        results = self.model.audit_batch(
-            texts,
-            tokenizer=self.tokenizer,
-            max_length=self.max_length,
-            batch_size=self.batch_size,
-        )
-        results = [self._postprocess_result(r) for r in results]
+
+        # 第一层: 规则引擎筛选
+        results = [None] * len(texts)
+        model_indices = []
+
+        if self.rule_engine and not self.skip_rules:
+            for i, text in enumerate(texts):
+                rule_result = self.rule_engine.check(text)
+                if rule_result is not None:
+                    results[i] = self._postprocess_result(rule_result)
+                    results[i]["layer"] = "rule"
+                else:
+                    model_indices.append(i)
+        else:
+            model_indices = list(range(len(texts)))
+
+        # 第二层: 模型推理 (仅对规则引擎未命中的文本)
+        if model_indices:
+            model_texts = [texts[i] for i in model_indices]
+
+            with torch.inference_mode():
+                model_results = self.model.audit_batch(
+                    model_texts, tokenizer=self.tokenizer,
+                    max_length=self.max_length, batch_size=self.batch_size,
+                )
+
+            for idx, model_result in zip(model_indices, model_results):
+                result = self._postprocess_result(model_result)
+                result["layer"] = "model"
+                results[idx] = result
+
         elapsed = time.time() - start
 
         violation_count = sum(1 for r in results if r["is_violation"])
-        safe_count = len(results) - violation_count
+        rule_hit_count = sum(1 for r in results if r.get("layer") == "rule")
+        model_hit_count = sum(1 for r in results if r.get("layer") == "model")
 
-        output = {
+        return {
             "results": results,
             "summary": {
                 "total": len(results),
                 "violation_count": violation_count,
-                "safe_count": safe_count,
+                "safe_count": len(results) - violation_count,
+                "rule_hit_count": rule_hit_count,
+                "model_hit_count": model_hit_count,
                 "latency_seconds": round(elapsed, 4),
             },
         }
-        return output
 
     def audit_batch_json(self, texts: List[str]) -> str:
-        """批量审核，返回 JSON 字符串"""
         result = self.audit_batch(texts)
         return json.dumps(result, ensure_ascii=False, indent=2)
-
-    # ---- 文件输入/输出 ----
 
     def audit_file(
         self,
         input_path: str,
         output_path: Optional[str] = None,
-        **kwargs,
     ) -> str:
-        """
-        从 JSONL 文件读取待审核文本，执行批量审核，写入 JSON 输出文件
-        
-        输入格式: JSONL，每行 {"text": "..."} 或 {"prompt": "..."}
-        输出格式: JSON (含 results + summary)
-        
-        Returns:
-            输出文件路径
-        """
-        # 读输入
+        """从 JSONL 文件读取文本，执行批量审核"""
         texts = []
         with open(input_path, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
@@ -250,35 +253,32 @@ class AuditInferencer:
             raise ValueError(f"{input_path} 中未找到有效文本数据")
 
         print(f"\n从 {input_path} 读取了 {len(texts)} 条文本")
-        
-        # 审核
-        result = self.audit_batch(texts, **kwargs)
 
-        # 确定输出路径
+        result = self.audit_batch(texts)
+
         if output_path is None:
             out_name = Path(input_path).stem + "_audit_result.json"
             output_path = str(Path(input_path).parent / out_name)
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
         s = result["summary"]
         print(f"\n[OUTPUT] 结果已保存: {output_path}")
-        print(f"   总计: {s['total']} 条 | "
-              f"违规: {s['violation_count']} 条 | "
+        print(f"   总计: {s['total']} 条 | 违规: {s['violation_count']} 条 | "
               f"合规: {s['safe_count']} 条 | "
+              f"规则命中: {s['rule_hit_count']} 条 | 模型推理: {s['model_hit_count']} 条 | "
               f"耗时: {s['latency_seconds']:.2f}s")
 
         return output_path
 
-    # ---- 交互模式 ----
-
     def interactive(self):
         """交互式逐条审核"""
         print("\n" + "=" * 55)
-        print("[AUDIT] 内容审核交互模式")
+        print("[AUDIT] 多层级内容审核交互模式")
+        print("   第一层: 规则引擎 (<1ms)")
+        print("   第二层: Encoder 模型 (<30ms)")
         print("   输入待审核文本后回车查看结果")
         print("   输入 quit / exit / q 退出\n")
 
@@ -297,11 +297,10 @@ class AuditInferencer:
             result = self.audit(text)
             elapsed = time.time() - t0
 
-            # 打印 JSON 结果
             print("\n--- 审核结果 ---")
             print(json.dumps(result, ensure_ascii=False, indent=2))
             print("-" * 38)
-            print(f"[TIME] 耗时: {elapsed:.3f}s\n")
+            print(f"[TIME] 耗时: {elapsed:.3f}s | 层级: {result.get('layer', '?')}\n")
 
 
 # ============================================================
@@ -310,53 +309,39 @@ class AuditInferencer:
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="内容审核专家模型推理 — 标准JSON输出",
+        description="多层级内容审核推理 — 规则引擎 + Encoder 模型",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-示例用法:
-  # 单条审核
-  python infer.py --checkpoint ./checkpoints/best.pt -- ./vocab.json --prompt "测试文本"
-
-  # 批量审核
-  python infer.py --ckpt best.pt --vocab vocab.json --prompts "文本1" "文本2"
-
-  # 文件审核 → JSON 输出
-  python infer.py --ckpt best.pt --vocab vocab.json --input_file input.jsonl
-
-  # 交互模式
-  python infer.py --ckpt best.pt --vocab vocab.json --interactive
+示例:
+  python infer.py --checkpoint ./checkpoints/best.pt --prompt "测试文本"
+  python infer.py --checkpoint ./checkpoints/best.pt --prompts "文本1" "文本2"
+  python infer.py --checkpoint ./checkpoints/best.pt --input_file input.jsonl
+  python infer.py --checkpoint ./checkpoints/best.pt --interactive
+  python infer.py --checkpoint ./checkpoints/best.pt --rules_dir ./rules --prompt "测试"
         """
     )
 
-    # 必需参数
     p.add_argument("--checkpoint", "--ckpt", type=str, required=True,
                    help="模型检查点路径 (.pt)")
-    p.add_argument("--vocab", type=str, required=True,
-                   help="词汇表 JSON 路径")
 
-    # 输入模式 (互斥)
     group = p.add_mutually_exclusive_group(required=True)
     group.add_argument("--prompt", type=str, default=None, help="单条待审文本")
     group.add_argument("--prompts", nargs="+", default=None, help="多条待审文本")
     group.add_argument("--input_file", type=str, default=None, help="输入 JSONL 文件路径")
     group.add_argument("--interactive", action="store_true", help="交互模式")
 
-    # 输出
     p.add_argument("--output", "-o", type=str, default=None, help="输出 JSON 文件路径")
-
-    # 设备
-    p.add_argument("--device", type=str, default="auto",
-                   help="设备 (auto/cpu/cuda/cuda:0)")
-    p.add_argument("--bf16", action="store_true", help="使用 BF16 推理")
-    p.add_argument("--max_length", type=int, default=256, help="推理最大文本长度")
-    p.add_argument("--batch_size", type=int, default=4, help="批量推理 batch 大小")
+    p.add_argument("--device", type=str, default="auto", help="设备 (auto/cpu/cuda)")
+    p.add_argument("--max_length", type=int, default=256, help="最大文本长度")
+    p.add_argument("--batch_size", type=int, default=8, help="批量推理 batch 大小")
     p.add_argument("--num_threads", type=int, default=2, help="CPU 推理线程数")
     p.add_argument("--violation_conf_threshold", type=float, default=0.30,
-                   help="违规判定最小置信度阈值 (0~1)。低于阈值的违规将回退为合规")
+                   help="违规判定最小置信度阈值")
     p.add_argument("--multi_thresholds", type=str, default=None,
-                   help="基于风险等级的多阈值策略 (JSON格式)。例: '{\"safe\":0.2,\"low\":0.3,\"medium\":0.4,\"high\":0.5,\"critical\":0.7}'")
-    p.add_argument("--disable_safe_consistency", action="store_true",
-                   help="关闭一致性后处理（默认开启：合规时强制 risk/type=safe）")
+                   help="多阈值策略 (JSON)")
+    p.add_argument("--disable_safe_consistency", action="store_true")
+    p.add_argument("--rules_dir", type=str, default=None, help="自定义规则目录")
+    p.add_argument("--skip_rules", action="store_true", help="跳过规则引擎，仅用模型")
 
     return p.parse_args()
 
@@ -368,7 +353,6 @@ def main():
         torch.set_num_threads(args.num_threads)
         torch.set_num_interop_threads(max(1, min(args.num_threads, 2)))
 
-    # 解析多阈值策略
     multi_thresholds = None
     if args.multi_thresholds:
         try:
@@ -377,45 +361,34 @@ def main():
             print(f"[ERROR] 无法解析 --multi_thresholds: {args.multi_thresholds}")
             sys.exit(1)
 
-    # 初始化推理器
     engine = AuditInferencer(
         checkpoint_path=args.checkpoint,
-        vocab_path=args.vocab,
         device=args.device,
-        use_bf16=args.bf16,
         max_length=args.max_length,
         batch_size=args.batch_size,
         enforce_safe_consistency=not args.disable_safe_consistency,
         violation_conf_threshold=args.violation_conf_threshold,
         multi_thresholds=multi_thresholds,
+        rules_dir=args.rules_dir,
+        skip_rules=args.skip_rules,
     )
 
-    # ---- 分发到各模式 ----
     if args.interactive:
         engine.interactive()
-
     elif args.input_file:
-        output_file = args.output or None
-        engine.audit_file(args.input_file, output_file)
-
+        engine.audit_file(args.input_file, args.output)
     else:
         prompts = args.prompts or [args.prompt]
-
         if len(prompts) == 1:
-            # 单条
             result_json = engine.audit_json(prompts[0])
             print(result_json)
-            
             if args.output:
                 with open(args.output, "w", encoding="utf-8") as f:
                     f.write(result_json)
                 print(f"\n[SAVE] 已保存: {args.output}")
-
         else:
-            # 批量
             result_json = engine.audit_batch_json(prompts)
             print(result_json)
-
             output_file = args.output or "audit_results.json"
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(result_json)

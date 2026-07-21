@@ -2,91 +2,104 @@
 
 # 御史 (YuShi Model) 内容审核模型
 
-轻量级中文内容审核模型，支持违规检测、风险等级分类和违规类型分类。
+轻量级中文内容审核模型 — 规则引擎 + Encoder 模型两级架构，CPU 服务器即可部署。
 
 > 御史：中国古代一种官职，负责稽查百官
 
-[文档](#项目概述) | [许可证](#许可证) | [快速开始](#快速开始) | [技术栈](#技术栈)
+[快速开始](#快速开始) | [架构设计](#架构设计) | [训练](#训练) | [部署](#部署) | [许可证](#许可证)
 
 </div>
 
 ---
 
-**免责声明：** 
+**免责声明：**
 当前模型受限于数据集质量及规模，仍处于**初级测试阶段**，可能存在误判、漏判或特定领域知识偏差，因此**不建议直接用于商业化生产环境**。模型输出结果仅供参考与技术交流，具体业务落地前请务必进行充分的验证与针对新场景微调训练。
-
-**在线演示网站（体验版）：** [御史（YuShi）模型在线演示](http://142.91.101.47:55555) 
-*（注：该网站维护日期截止到26年5月16日，敬请尽早体验，逾期将不可访问）*
 
 ## 项目概述
 
-本项目提供了一个易用的端到端内容审核解决方案。输入文本后，模型输出结构化的审核结果：
+本项目提供了一个**轻量级、可本地部署**的中文内容审核解决方案。核心设计目标：
+
+- **不依赖外部 LLM API**：无隐私风险，无调用成本
+- **不需要 GPU**：普通 CPU 云服务器即可运行
+- **两级审核架构**：规则引擎极速处理明确场景，Encoder 模型处理灰色地带
+- **多维度输出**：违规检测 + 风险等级 + 违规类型 + 置信度
+
+输入文本后，输出结构化审核结果：
 
 ```json
 {
-  "is_violation": false,
-  "risk_level": "safe",
-  "violation_type": "safe",
+  "is_violation": true,
+  "risk_level": "high",
+  "violation_type": "spam",
   "confidence": 0.95,
-  "reason": "文本内容合规"
+  "reason": "命中违规关键词: 刷单兼职",
+  "layer": "rule"
 }
 ```
 
-## 开源信息
+## 架构设计
 
-许可证：[MIT License](#许可证)
+```
+用户输入文本
+       ↓
+┌─────────────────────────────────────┐
+│  第一层：规则引擎 (<1ms)             │
+│  - 黑名单关键词匹配                  │
+│  - 正则模式匹配 (变体/谐音)          │
+│  - 白名单快速放行                    │
+│  命中 → 直接返回结果                  │
+└─────────────┬───────────────────────┘
+              ↓ 未命中 (~20% 流量)
+┌─────────────────────────────────────┐
+│  第二层：Encoder 模型 (~20ms)        │
+│  - chinese-roberta-wwm-ext backbone │
+│  - 多任务分类头                      │
+│  - 置信度阈值后处理                  │
+└─────────────────────────────────────┘
+```
 
-技术栈：
-- PyTorch 2.1+ (深度学习框架)
-- Hugging Face Datasets (数据集管理)
-- FastAPI (HTTP 服务框架)
+**性能预估 (4 核 CPU)**：
+- 规则引擎：<1ms/条
+- 模型推理：~20ms/条
+- 批量吞吐：100~200 条/秒
+- 模型大小：~400MB
+- 内存占用：<1GB
 
-## 核心功能
+## 技术栈
 
-- 训练模块 (`train.py`): 支持本地 JSONL 和 Hugging Face 数据集多源融合
-- 推理模块 (`infer.py` / `infer_onnx.py`): 本地可用 PyTorch，部署默认 ONNX 加速
-- 模型架构 (`model.py`): 轻量级 Transformer + 多任务头设计
-- 工具集 (`dataset.py`): 数据处理和字符级 Tokenizer
-- 专项认知增强: 支持通过过采样自定义高权重语料（如台湾主权事实数据等）完成领域概念微调
-- 前端测试 (`web_test/`): 后端自带一个轻量级的 Python 可视化 Web 测试网页
-- 阈值搜索 (`threshold_search.py`): 生产环境阈值优化工具
+- PyTorch 2.1+
+- Transformers (HuggingFace)
+- FastAPI
+- chinese-roberta-wwm-ext (预训练 Encoder)
 
-模型池化策略：
-- 默认采用融合池化 (last-token + mean-pooling，默认权重 0.6/0.4)
-- 该策略兼顾长文本尾部语义和短文本稳定性，提升短句/词组审核鲁棒性
+## 快速开始
 
-## 环境要求
+### 环境要求
 
 - Python 3.10+
-- CUDA GPU 强烈推荐用于训练；CPU 仍可用于推理和小规模调试
+- 4 核 CPU / 8GB 内存即可（无需 GPU）
 
-安装依赖：
-
-**仅 CPU 推理和训练：**
+### 安装依赖
 
 ```bash
+# CPU 训练和推理
 pip install -r requirements-train-cpu.txt
+
+# 或仅部署推理
+pip install -r requirements-deploy-cpu.txt
 ```
 
-**GPU 训练和推理（CUDA 11.8）：**
+### 测试规则引擎
 
 ```bash
-pip install -r requirements-train-gpu.txt
+python rule_engine.py
 ```
 
-**其他 CUDA 版本（GPU）：**
+### 测试模型加载
 
 ```bash
-# CUDA 12.1
-pip install datasets>=2.14.0 wandb>=0.17.0 numpy>=1.24.0
-pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu121
-
-# CUDA 12.4
-pip install datasets>=2.14.0 wandb>=0.17.0 numpy>=1.24.0
-pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu124
+python model.py
 ```
-
-详见 [PyTorch 官方安装指南](https://pytorch.org/)
 
 ## 数据格式
 
@@ -103,155 +116,183 @@ pip install 'torch>=2.1.0' --index-url https://download.pytorch.org/whl/cu124
 
 ## 训练
 
-默认建议使用 GPU 训练。当前训练脚本已支持 AMP、TF32、`torch.compile`、更激进的 DataLoader 预取和 `--fast_gpu` 快速模式，能显著提升吞吐；CPU 训练只建议用于验证流程或临时调试。
-
-### 1) 从本地数据集训练
-
-本项目基于构建好的本地数据集进行训练（含涉政、色情、暴恐、违禁词、暗语等多种情况），通过以下命令启动训练：
-
 ```bash
 python train.py \
   --train_data DataSet/cleaned/dataset_final_v4.0_train.jsonl \
   --val_data DataSet/cleaned/dataset_final_v4.0_val.jsonl \
-  --epochs 2 \
-  --batch_size 32 \
-  --val_batch_size 64 \
+  --backbone hfl/chinese-roberta-wwm-ext \
+  --freeze_layers 6 \
+  --epochs 10 \
+  --batch_size 16 \
+  --learning_rate 2e-4 \
   --use_cuda \
   --fast_gpu \
-  --use_amp \
-  --compile_model \
-  --persistent_workers \
-  --prefetch_factor 4 \
-  --num_workers 4 \
   --output_dir ./checkpoints/
 ```
 
-> **提示**：目前模型已经完成了隐晦违规（V4.0）的对抗样本微调，能够有效拦截各类变体暗语（如“伞兵”、“老司机”等）。
+主要参数：
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--backbone` | `hfl/chinese-roberta-wwm-ext` | 预训练 Encoder 模型 |
+| `--freeze_layers` | `6` | 冻结 backbone 底部 N 层 |
+| `--max_seq_len` | `256` | 最大序列长度 |
+| `--learning_rate` | `2e-4` | 学习率（backbone 使用 0.1 倍） |
+| `--pool_last_weight` | `0.6` | 融合池化 last-token 权重 |
 
 ## 推理
 
-### 单条/批量推理
+### 单条审核
 
 ```bash
 python infer.py \
-  --checkpoint ./checkpoints/checkpoints_final_9to1/best.pt \
-  --vocab ./checkpoints/checkpoints_final_9to1/vocab.json \
-  --device cuda \
-  --violation_conf_threshold 0.30 \
-  --prompts "今天天气很好，准备去跑步。" "代发视频兼职日结，私聊我。"
+  --checkpoint ./checkpoints/best.pt \
+  --prompt "今天天气很好，准备去跑步。"
+```
+
+### 批量审核
+
+```bash
+python infer.py \
+  --checkpoint ./checkpoints/best.pt \
+  --prompts "今天天气很好" "代发视频兼职日结，私聊我。"
 ```
 
 ### 文件批处理
 
 ```bash
 python infer.py \
-  --checkpoint ./checkpoints/checkpoints_final_9to1/best.pt \
-  --vocab ./checkpoints/checkpoints_final_9to1/vocab.json \
-  --device cuda \
-  --violation_conf_threshold 0.30 \
+  --checkpoint ./checkpoints/best.pt \
   --input_file ./input.jsonl \
   --output ./predictions.json
 ```
 
-## 快速开始 (部署)
-
-目前本仓库采用部署与训练分离策略：
-- 本地训练：维护和使用 PyTorch 原生脚本（`train.py` + `checkpoints/*.pt` 等）
-- 目标发布：将导出的高速 ONNX 推理文件及其他核心脚本更新在根目录，由工作流自动提取所需文件进行打包，独立运行且不依赖庞大的构建脚本或文档。
-
-部署包获取包含完整的运行配置：包含可执行脚本、API 服务（`api_server.py`）及前端 Web 测试程序（`web_test/server.py`）。
-
-部署及测试使用流程：
+### 交互模式
 
 ```bash
-# 1) 获得完整部署代码或从 Releases 下载压缩包
-# 2) 安装依赖
-pip install -r requirements-deploy-cpu.txt
+python infer.py \
+  --checkpoint ./checkpoints/best.pt \
+  --interactive
+```
 
-# 3) 启动后端过滤 API 引擎
-bash run_api.sh --port 8000
+### 自定义规则目录
 
-# 4) (可选) 启动前端 Web 可视化工具进行界面测试
+```bash
+python infer.py \
+  --checkpoint ./checkpoints/best.pt \
+  --rules_dir ./rules \
+  --prompt "测试文本"
+```
+
+### 跳过规则引擎（仅用模型）
+
+```bash
+python infer.py \
+  --checkpoint ./checkpoints/best.pt \
+  --skip_rules \
+  --prompt "测试文本"
+```
+
+## 部署
+
+### 启动 API 服务
+
+```bash
+# 方式一：使用启动脚本
+bash run_api.sh 8000
+
+# 方式二：直接启动
+python api_server.py --port 8000 --checkpoint ./checkpoints/best.pt
+```
+
+### API 接口
+
+```bash
+# 健康检查
+curl http://127.0.0.1:8000/health
+
+# 单条审核
+curl -X POST http://127.0.0.1:8000/audit \
+  -H "Content-Type: application/json" \
+  -d '{"text":"代发兼职日结，私聊我"}'
+
+# 批量审核
+curl -X POST http://127.0.0.1:8000/audit/batch \
+  -H "Content-Type: application/json" \
+  -d '{"texts":["今天天气真好","约炮加我微信"]}'
+```
+
+### Web 测试界面
+
+```bash
 cd web_test
-python server.py  # 启动后在浏览器打开 http://127.0.0.1:8090
+python server.py
+# 浏览器打开 http://127.0.0.1:8090
 ```
 
-GPU 主机如需启动加速 API：
+### 环境变量
 
-```bash
-pip install -r requirements-deploy-gpu.txt
-bash run_api.sh --port 8000 --onnx_gpu
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CHECKPOINT_PATH` | `./checkpoints/best.pt` | 模型路径 |
+| `RULES_DIR` | `./rules` | 规则目录 |
+| `VIOLATION_CONF_THRESHOLD` | `0.30` | 违规置信度阈值 |
+| `INFER_MAX_LENGTH` | `256` | 最大文本长度 |
+| `INFER_BATCH_SIZE` | `8` | 批量大小 |
+
+## 规则引擎扩展
+
+### 自定义规则目录结构
+
+```
+rules/
+├── blacklist.json   # 黑名单关键词
+├── whitelist.json   # 白名单关键词
+└── patterns.json    # 正则模式
 ```
 
-若想要在训练端新导出一份最新 ONNX 文件：
+### 动态添加规则（代码方式）
 
-```bash
-python export_onnx.py \
-  --checkpoint ./checkpoints/final.pt \
-  --vocab ./checkpoints/vocab.json \
-  --output ./checkpoints/model.onnx \
-  --max_length 256
+```python
+from rule_engine import RuleEngine
+
+engine = RuleEngine()
+engine.add_blacklist("违规词", violation_type="other", risk_level="high")
+engine.add_whitelist("安全短语")
+engine.save_rules("./rules")
 ```
 
-## 主要功能与特性
+## 主要特性
 
-- 多数据源融合训练 (Hugging Face + 本地文件)
-- 轻量级模型设计 (~50 MB)
-- 多任务学习 (违规检测 + 风险分类 + 类型分类)
-- 生产级阈值优化工具
-- CLI + HTTP API 双接口
-- CPU/GPU 自适应
+- **两级审核架构**：规则引擎 (<1ms) + Encoder 模型 (~20ms)
+- **预训练知识**：基于 chinese-roberta-wwm-ext，天然理解中文语义
+- **多任务学习**：违规检测 + 风险等级 + 违规类型 + 置信度
+- **规则可扩展**：支持黑白名单 + 正则模式，可热更新
+- **CPU 友好**：~400MB 模型，<1GB 内存，无需 GPU
+- **CLI + HTTP API**：支持单条/批量/文件/交互模式
 
-## 模型性能
+## 项目结构
 
-在验证集上：
-- 准确率: 95.2%
-- F1 分数: 0.94
-- 误杀率: 2.1%
-
-## 阈值搜索 (生产环境调优)
-
-```bash
-python scripts/threshold_search.py \
-  --checkpoint ./checkpoints/checkpoints_funnlp_lexicon/best.pt \
-  --vocab ./checkpoints/checkpoints_funnlp_lexicon/vocab.json \
-  --val_jsonl ./path/to/val.jsonl \
-  --device cuda \
-  --thr_start 0.30 \
-  --thr_end 0.80 \
-  --thr_step 0.01 \
-  --objective balanced \
-  --out_csv ./checkpoints/checkpoints_funnlp_lexicon/threshold_search_results.csv \
-  --out_best ./checkpoints/checkpoints_funnlp_lexicon/best_threshold.json
+```
+YuShi_model/
+├── model.py                 # Encoder 模型定义
+├── dataset.py               # 数据加载 (HuggingFace tokenizer)
+├── rule_engine.py           # 规则引擎
+├── train.py                 # 训练脚本
+├── infer.py                 # 推理脚本 (两级架构)
+├── api_server.py            # FastAPI 服务
+├── export_onnx.py           # ONNX 导出 (可选)
+├── run_api.sh               # API 启动脚本
+├── checkpoints/             # 模型检查点 (训练后生成)
+├── web_test/                # Web 测试界面
+└── DataSet/                 # 训练数据集
 ```
 
 ## 开源发布说明
 
 本仓库已配置为不提交大型文件和私有数据。
 
-通常不包含在发布中的内容：
-- 数据集文件夹 (基于大小和许可证原因)
-- 训练检查点目录 (如 `checkpoints_final_9to1/`)
-- 本地输出日志和缓存
-
-部署包发布与运行方式：
-- 监听根目录及 `checkpoints/` 等核心资产文件触发自动发布打包。
-- 当 `checkpoints/` 目录中的模型和 `vocab.json` 或者 `api_server.py` 等对应脚本被更新后即可推送代码。
-- 发布时工作流将自动抽取必要文件，生成归档打包文件供线上机器使用。
-
-测试通讯 API 可使用：
-
-```bash
-# 单条 API 自检测试
-curl -X POST http://127.0.0.1:8000/audit \
-  -H "Content-Type: application/json" \
-  -d '{"text":"坚决维护国家统一，台湾是中国的一部分"}'
-```
-
-最后发布前请再次确认：
-- 无私有数据在追踪文件中
-- 所有外部数据集的许可证兼容性
-- README 中命令可复现
+部署包发布：推送到 main/master 分支且核心文件变更时，GitHub Actions 自动打包发布。
 
 ## 许可证
 

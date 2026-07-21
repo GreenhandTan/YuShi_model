@@ -4,8 +4,8 @@ import argparse
 from pathlib import Path
 
 import torch
+from transformers import AutoTokenizer
 
-from dataset import SimpleTokenizer
 from model import ContentAuditExpert
 
 
@@ -22,8 +22,7 @@ class OnnxWrapper(torch.nn.Module):
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Export PT checkpoint to ONNX")
     p.add_argument("--checkpoint", type=str, required=True)
-    p.add_argument("--vocab", type=str, required=True)
-    p.add_argument("--output", type=str, default="./checkpoints_final_9to1/model.onnx")
+    p.add_argument("--output", type=str, default="./checkpoints/model.onnx")
     p.add_argument("--max_length", type=int, default=256)
     p.add_argument("--opset", type=int, default=17)
     return p.parse_args()
@@ -32,18 +31,22 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    tokenizer = SimpleTokenizer.load(args.vocab)
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    backbone_name = ckpt.get("backbone_name", "hfl/chinese-roberta-wwm-ext")
     model_args = ckpt.get("args", {})
 
+    # 加载 tokenizer
+    tokenizer_dir = Path(args.checkpoint).parent / "tokenizer"
+    if tokenizer_dir.exists():
+        tokenizer = AutoTokenizer.from_pretrained(str(tokenizer_dir))
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(backbone_name)
+
     model = ContentAuditExpert(
-        vocab_size=tokenizer.vocab_size,
-        dim=model_args.get("dim", 256),
-        n_layers=model_args.get("n_layers", 6),
-        n_heads=model_args.get("n_heads", 4),
-        ffn_multiplier=model_args.get("ffn_multiplier", 4),
-        max_seq_len=model_args.get("max_seq_len", 1024),
-        pad_token_id=tokenizer.pad_token_id,
+        backbone_name=backbone_name,
+        dropout=model_args.get("dropout", 0.1),
+        pool_last_weight=model_args.get("pool_last_weight", 0.6),
+        freeze_backbone_layers=0,
     )
 
     state_dict = {k.replace("module.", ""): v for k, v in ckpt["model_state_dict"].items()}
@@ -53,9 +56,7 @@ def main() -> None:
     wrapper = OnnxWrapper(model).eval()
 
     dummy_input_ids = torch.randint(0, tokenizer.vocab_size, (2, args.max_length), dtype=torch.long)
-    dummy_attention_mask = torch.zeros((2, args.max_length), dtype=torch.long)
-    dummy_attention_mask[0, :args.max_length] = 1
-    dummy_attention_mask[1, :args.max_length // 2] = 1
+    dummy_attention_mask = torch.ones((2, args.max_length), dtype=torch.long)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -7,14 +7,14 @@ on:
       - master
     paths:
       - 'api_server.py'
-      - 'infer_onnx.py'
-      - 'tokenizer_min.py'
+      - 'infer.py'
+      - 'model.py'
+      - 'rule_engine.py'
+      - 'dataset.py'
       - 'run_api.sh'
-      - 'run_infer.sh'
       - 'requirements-deploy-cpu.txt'
       - 'requirements-deploy-gpu.txt'
-      - 'checkpoints/model.onnx'
-      - 'checkpoints/vocab.json'
+      - 'checkpoints/best.pt'
       - 'web_test/index.html'
       - 'web_test/server.py'
       - '.github/workflows/release_deploy_packages.yml'
@@ -47,20 +47,23 @@ jobs:
           fi
 
           # Create a temp deploy directory and organize core files
-          mkdir -p staging_deploy/checkpoints staging_deploy/web_test staging_deploy/logs
-          
-          # Copy scripts and core files
-          cp api_server.py infer_onnx.py tokenizer_min.py run_api.sh run_infer.sh requirements-deploy-cpu.txt requirements-deploy-gpu.txt staging_deploy/ || true
-          
-          # Copy checkpoints
-          cp checkpoints/model.onnx checkpoints/vocab.json staging_deploy/checkpoints/ || true
-          
-          # Copy Web UI components
+          mkdir -p staging_deploy/checkpoints staging_deploy/web_test
+
+          # Copy core inference files
+          cp api_server.py infer.py model.py rule_engine.py dataset.py run_api.sh staging_deploy/
+          cp requirements-deploy-cpu.txt requirements-deploy-gpu.txt staging_deploy/
+
+          # Copy checkpoints (model + tokenizer)
+          if [[ -d checkpoints ]]; then
+            cp -r checkpoints/* staging_deploy/checkpoints/ 2>/dev/null || true
+          fi
+
+          # Copy Web UI
           cp web_test/index.html web_test/server.py staging_deploy/web_test/ || true
 
           mkdir -p release_assets
 
-          # Archive from the staging_deploy directory
+          # Archive
           pushd staging_deploy
           zip -r "../release_assets/deploy_${RELEASE_DATE}.zip" . -x "*/__pycache__/*" "*.pyc"
           tar -czf "../release_assets/deploy_${RELEASE_DATE}.tar.gz" .
@@ -83,28 +86,28 @@ jobs:
           body: |
             ## 部署包发布
 
-            本次发布由特定更新（核心推理文件、模型权重）触发并自动提取打包生成。
+            多层级内容审核服务 — 规则引擎 + Encoder 模型
 
             - 资产文件由工作流核心资产抽取后打包，添加了发布日期后缀
             - 同时包含 ZIP 与 TAR.GZ 两种格式
             - 附带 checksums.txt 用于完整性校验
 
-            ## 部署步骤（ONNX 推理）
+            ## 部署步骤
 
             1. 下载并解压 `deploy_*.zip` 或 `deploy_*.tar.gz`
-            2. 进入解压目录（目录内应包含 `api_server.py`、`infer_onnx.py`、`checkpoints/model.onnx`）
+            2. 进入解压目录
             3. 安装依赖并启动服务
 
             CPU:
             ```bash
             pip install -r requirements-deploy-cpu.txt
-            bash run_api.sh --port 8000
+            bash run_api.sh 8000
             ```
 
             GPU:
             ```bash
             pip install -r requirements-deploy-gpu.txt
-            bash run_api.sh --port 8000 --onnx_gpu
+            bash run_api.sh 8000
             ```
 
             4. 健康检查
